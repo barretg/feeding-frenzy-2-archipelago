@@ -27,6 +27,18 @@ THREAD_ACCESS = (
     THREAD_QUERY_INFORMATION
 )
 
+Wow64GetThreadContext = ctypes.windll.kernel32.Wow64GetThreadContext
+Wow64GetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+Wow64GetThreadContext.restype = wintypes.BOOL
+
+Wow64SetThreadContext = ctypes.windll.kernel32.Wow64SetThreadContext
+Wow64SetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+Wow64SetThreadContext.restype = wintypes.BOOL
+
+# known offsets from game object base
+OFFSET_LIVES    = 0x10
+OFFSET_PROGRESS = 0x40
+
 class THREADENTRY32(ctypes.Structure):
     _fields_ = [
         ("dwSize",             wintypes.DWORD),
@@ -109,7 +121,7 @@ class CONTEXT(ctypes.Structure):
         ("EFlags",            wintypes.DWORD),
         ("Esp",               wintypes.DWORD),
         ("SegSs",             wintypes.DWORD),
-        ("ExtendedRegisters", ctypes.c_byte * 512),  # fix: complete struct
+        ("ExtendedRegisters", ctypes.c_byte * 512),
     ]
 
 def get_process_threads(pid):
@@ -136,18 +148,18 @@ def set_hardware_breakpoint(thread_handle, address):
     try:
         ctx = CONTEXT()
         ctx.ContextFlags = CONTEXT_CAPTURE
-        if not ctypes.windll.kernel32.GetThreadContext(thread_handle, ctypes.byref(ctx)):
-            print(f"  GetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
+        if not Wow64GetThreadContext(thread_handle, ctypes.byref(ctx)):
+            print(f"  Wow64GetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
             return False
 
         ctx.Dr0 = address
         ctx.Dr6 = 0
-        ctx.Dr7 |= 0x1           # enable local BP0
-        ctx.Dr7 &= ~(0xF << 16)  # clear RW0/LEN0: execution, length 1
+        ctx.Dr7 |= 0x1
+        ctx.Dr7 &= ~(0xF << 16)
         ctx.ContextFlags = CONTEXT_CAPTURE
 
-        if not ctypes.windll.kernel32.SetThreadContext(thread_handle, ctypes.byref(ctx)):
-            print(f"  SetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
+        if not Wow64SetThreadContext(thread_handle, ctypes.byref(ctx)):
+            print(f"  Wow64SetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
             return False
 
         return True
@@ -160,11 +172,11 @@ def clear_hardware_breakpoint(thread_handle):
     try:
         ctx = CONTEXT()
         ctx.ContextFlags = CONTEXT_CAPTURE
-        ctypes.windll.kernel32.GetThreadContext(thread_handle, ctypes.byref(ctx))
+        Wow64GetThreadContext(thread_handle, ctypes.byref(ctx))
         ctx.Dr0 = 0
         ctx.Dr7 &= ~0x1
         ctx.ContextFlags = CONTEXT_CAPTURE
-        ctypes.windll.kernel32.SetThreadContext(thread_handle, ctypes.byref(ctx))
+        Wow64SetThreadContext(thread_handle, ctypes.byref(ctx))
     finally:
         ctypes.windll.kernel32.ResumeThread(thread_handle)
 
@@ -176,48 +188,12 @@ def set_bp_on_thread(tid, address):
         return ok
     return False
 
-def derive_lives_address(ctx, target, pm):
-    """
-    Read the actual instruction bytes at target and derive
-    the lives address from the correct register + offset.
-    """
-    code = pm.read_bytes(target, 8)
-    print(f"  Instruction bytes at target: {code.hex(' ')}")
-
-    # common mov [reg+offset], src patterns
-    # 89 40 10 = mov [eax+10], eax
-    # 89 48 10 = mov [ecx+10], ecx
-    # 89 50 10 = mov [edx+10], edx
-    # 89 58 10 = mov [ebx+10], ebx
-    # 89 70 10 = mov [esi+10], esi
-    # 89 78 10 = mov [edi+10], edi
-    # first byte 89 = MOV r/m32, r32
-    # second byte encodes ModRM: mod=01, reg=src, rm=dst_base
-    if code[0] == 0x89:
-        modrm = code[1]
-        rm = modrm & 0x7
-        reg_map = {0: ctx.Eax, 1: ctx.Ecx, 2: ctx.Edx,
-                   3: ctx.Ebx, 6: ctx.Esi, 7: ctx.Edi}
-        offset = code[2]
-        base_reg = reg_map.get(rm)
-        if base_reg is not None:
-            addr = base_reg + offset
-            print(f"  Decoded: [reg({rm})+0x{offset:02X}] = 0x{addr:08X}")
-            return addr
-
-    # fallback: print all regs and let user decide
-    print("  Could not auto-decode instruction. Registers:")
-    print(f"    EAX=0x{ctx.Eax:08X} ECX=0x{ctx.Ecx:08X} EDX=0x{ctx.Edx:08X}")
-    print(f"    EBX=0x{ctx.Ebx:08X} ESI=0x{ctx.Esi:08X} EDI=0x{ctx.Edi:08X}")
-    return None
-
-def capture_lives_address(pm, base):
+def capture_game_object(pm, base):
     target = base + LIVES_WRITE_OFFSET
 
-    # print instruction bytes before attaching
     code = pm.read_bytes(target, 8)
     print(f"Instruction bytes at 0x{target:08X}: {code.hex(' ')}")
-    print(f"Watching instruction — load a level to capture lives address...")
+    print(f"Watching instruction — load a level to capture game object...")
 
     if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
         err = ctypes.windll.kernel32.GetLastError()
@@ -232,10 +208,10 @@ def capture_lives_address(pm, base):
         ok = set_bp_on_thread(tid, target)
         print(f"  Thread {tid}: {'ok' if ok else 'FAILED'}")
 
-    lives_address = None
+    game_object = None
     debug_event = DEBUG_EVENT()
 
-    while lives_address is None:
+    while game_object is None:
         if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
             continue
 
@@ -244,48 +220,33 @@ def capture_lives_address(pm, base):
 
         if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
             print(f"  New thread {tid}, setting breakpoint...")
-            # suspend ALL existing threads while we set up
-            all_threads = get_process_threads(pm.process_id)
-            handles = []
-            for t in all_threads:
-                if t != tid:
-                    th = get_thread_handle(t)
-                    if th:
-                        ctypes.windll.kernel32.SuspendThread(th)
-                        handles.append(th)
-            
             set_bp_on_thread(tid, target)
-            
-            # resume all
-            for th in handles:
-                ctypes.windll.kernel32.ResumeThread(th)
-                ctypes.windll.kernel32.CloseHandle(th)
 
         elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
             code = debug_event.u.Exception.ExceptionRecord.ExceptionCode
             exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            print(f"  Exception: code=0x{code:08X} addr=0x{exc_addr or 0:08X}")
 
-            if code == EXCEPTION_SINGLE_STEP:
+            if exc_addr == target and code not in (0x80000003,):
                 th = get_thread_handle(tid)
                 if th:
                     if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
                         try:
                             ctx = CONTEXT()
                             ctx.ContextFlags = CONTEXT_CAPTURE
-                            if ctypes.windll.kernel32.GetThreadContext(th, ctypes.byref(ctx)):
+                            if Wow64GetThreadContext(th, ctypes.byref(ctx)):
                                 eip = ctx.Eip
+                                eax = ctx.Eax
                                 print(
-                                    f"  Single step: EIP=0x{eip:08X} "
-                                    f"EAX=0x{ctx.Eax:08X} ECX=0x{ctx.Ecx:08X} "
+                                    f"  Hit: EIP=0x{eip:08X} "
+                                    f"EAX=0x{eax:08X} ECX=0x{ctx.Ecx:08X} "
                                     f"EDX=0x{ctx.Edx:08X} ESI=0x{ctx.Esi:08X} "
                                     f"EDI=0x{ctx.Edi:08X}"
                                 )
-                                if eip == target:
-                                    lives_address = derive_lives_address(ctx, target, pm)
-                                    if lives_address:
-                                        print(f"  Lives address: 0x{lives_address:08X}")
-                                        clear_hardware_breakpoint(th)
+                                game_object = eax
+                                print(f"  Game object base: 0x{game_object:08X}")
+                                print(f"  Lives   at: 0x{game_object + OFFSET_LIVES:08X}")
+                                print(f"  Progress at: 0x{game_object + OFFSET_PROGRESS:08X}")
+                                clear_hardware_breakpoint(th)
                         finally:
                             ctypes.windll.kernel32.ResumeThread(th)
                     ctypes.windll.kernel32.CloseHandle(th)
@@ -298,9 +259,13 @@ def capture_lives_address(pm, base):
         )
 
     ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-    return lives_address
+    return game_object
 
-def write_lives(pm, address, value):
+def read_int(pm, address):
+    buf = pm.read_bytes(address, 4)
+    return int.from_bytes(buf, byteorder='little')
+
+def write_int(pm, address, value):
     buf = value.to_bytes(4, byteorder='little')
     written = ctypes.c_size_t(0)
     ctypes.windll.kernel32.WriteProcessMemory(
@@ -310,6 +275,13 @@ def write_lives(pm, address, value):
         4,
         ctypes.byref(written)
     )
+
+def print_help():
+    print("Commands:")
+    print("  lives <n>     - set lives to n")
+    print("  progress <n>  - set level progress meter to n")
+    print("  read          - print current lives and progress values")
+    print("  quit          - exit")
 
 def main():
     print(f"Attaching to {PROCESS_NAME}...")
@@ -324,21 +296,68 @@ def main():
     ).lpBaseOfDll
     print(f"Base: 0x{base:08X}")
 
-    lives_address = capture_lives_address(pm, base)
+    game_object = capture_game_object(pm, base)
 
-    print("\nReady. Type a number to set lives, or 'quit' to exit.\n")
+    lives_addr    = game_object + OFFSET_LIVES
+    progress_addr = game_object + OFFSET_PROGRESS
+
+    print()
+    print_help()
+    print()
+
     while True:
         try:
-            val = input("> ").strip()
-            if val.lower() == "quit":
-                break
-            lives = int(val)
-            write_lives(pm, lives_address, lives)
-            print(f"Lives set to {lives}")
-        except ValueError:
-            print("Enter a number")
-        except Exception as e:
-            print(f"Write failed: {e}")
+            parts = input("> ").strip().lower().split()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting.")
+            break
+
+        if not parts:
+            continue
+
+        cmd = parts[0]
+
+        if cmd == "quit":
+            break
+
+        elif cmd == "lives":
+            if len(parts) < 2:
+                print("Usage: lives <n>")
+                continue
+            try:
+                val = int(parts[1])
+                write_int(pm, lives_addr, val)
+                print(f"Lives set to {val}")
+            except ValueError:
+                print("Invalid number.")
+            except Exception as e:
+                print(f"Write failed: {e}")
+
+        elif cmd == "progress":
+            if len(parts) < 2:
+                print("Usage: progress <n>")
+                continue
+            try:
+                val = int(parts[1])
+                write_int(pm, progress_addr, val)
+                print(f"Progress set to {val}")
+            except ValueError:
+                print("Invalid number.")
+            except Exception as e:
+                print(f"Write failed: {e}")
+
+        elif cmd == "read":
+            try:
+                lives    = read_int(pm, lives_addr)
+                progress = read_int(pm, progress_addr)
+                print(f"Lives:    {lives}")
+                print(f"Progress: {progress}")
+            except Exception as e:
+                print(f"Read failed: {e}")
+
+        else:
+            print(f"Unknown command: {cmd}")
+            print_help()
 
 if __name__ == "__main__":
     main()
