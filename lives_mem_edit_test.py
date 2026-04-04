@@ -3,13 +3,14 @@ import pymem.process
 import ctypes
 import ctypes.wintypes as wintypes
 import sys
+import threading
 
 PROCESS_NAME = "popcapgame1.exe"
 
 # breakpoint: level state object
 LEVEL_STATE_OFFSET = 0x9C064
 
-# confirmed offsets from level state object base
+# confirmed offsets from captured eax value
 OFFSET_LIVES          = 0x10
 OFFSET_SCORE          = 0x14
 OFFSET_STAGE          = 0x24
@@ -306,6 +307,26 @@ def print_status(pm, level_obj):
     print(f"  lives_snapshot: {read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)}")
     print(f"  progress      : {read_int(pm, level_obj + OFFSET_PROGRESS)}")
 
+def level_watcher(pm, level_obj, stop_event):
+    completed = set()
+    last_level_id = None
+
+    while not stop_event.is_set():
+        try:
+            current = read_int(pm, level_obj + OFFSET_LEVEL_ID)
+            if last_level_id is not None and current == last_level_id + 1:
+                completed_id = last_level_id
+                if completed_id in completed:
+                    print(f"\n  [watcher] Level {completed_id+1} COMPLETE (already seen)") # +1 for 1-based display
+                else:
+                    completed.add(completed_id)
+                    print(f"\n  [watcher] Level {completed_id+1} COMPLETE (new!)") # +1 for 1-based display
+                print("> ", end="", flush=True)
+            last_level_id = current
+        except Exception:
+            pass
+        stop_event.wait(0.1)
+
 def print_help():
     print("Commands:")
     print("  lives <n>    - set lives")
@@ -328,6 +349,14 @@ def main():
     print(f"Base: 0x{base:08X}")
 
     level_obj = capture_level_object(pm, base)
+
+    stop_event = threading.Event()
+    watcher_thread = threading.Thread(
+        target=level_watcher,
+        args=(pm, level_obj, stop_event),
+        daemon=True
+    )
+    watcher_thread.start()
 
     print()
     print_help()
@@ -384,6 +413,9 @@ def main():
         else:
             print(f"Unknown command: {cmd}")
             print_help()
+
+    stop_event.set()
+    watcher_thread.join(timeout=1)
 
 if __name__ == "__main__":
     main()
