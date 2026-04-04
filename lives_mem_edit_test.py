@@ -367,11 +367,12 @@ def level_watcher(pm, level_obj, stop_event):
 
 def print_help():
     print("Commands:")
-    print("  lives <n>    - set lives")
-    print("  progress <n> - set progress meter")
-    print("  status       - print all known values")
-    print("  dump [count] - hex dump level state region")
-    print("  quit         - exit")
+    print("  lives <n>       - set lives")
+    print("  progress <n>    - set progress meter")
+    print("  item <name> <n> - grant 1 item (e.g. life) after n seconds")
+    print("  status          - print all known values")
+    print("  dump [count]    - hex dump level state region")
+    print("  quit            - exit")
 
 def main():
     print(f"Attaching to {PROCESS_NAME}...")
@@ -447,6 +448,34 @@ def main():
                 dump_region(pm, level_obj, count)
             except Exception as e:
                 print(f"Failed: {e}")
+
+        elif cmd == "item":
+            if len(parts) < 2:
+                print("Usage: item <name> [delay]")
+                continue
+            item_name = parts[1]
+            delay = int(parts[2]) if len(parts) > 2 else 0
+
+            def dispatch_item(item_name, delay):
+                if delay:
+                    print(f"  [item] {item_name} incoming in {delay}s...")
+                    stop_event.wait(delay)
+                if item_name == "life":
+                    try:
+                        current = read_int(pm, level_obj + OFFSET_LIVES)
+                        write_int(pm, level_obj + OFFSET_LIVES, current + 1)
+                        print(f"\n  [item] Life granted. Lives: {current + 1}")
+                    except Exception as e:
+                        print(f"\n  [item] Failed: {e}")
+                else:
+                    print(f"\n  [item] Unknown item: {item_name}")
+                print("> ", end="", flush=True)
+
+            threading.Thread(
+                target=dispatch_item,
+                args=(item_name, delay),
+                daemon=True
+            ).start()
 
         else:
             print(f"Unknown command: {cmd}")
