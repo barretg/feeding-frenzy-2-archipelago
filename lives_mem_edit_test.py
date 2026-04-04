@@ -307,22 +307,60 @@ def print_status(pm, level_obj):
     print(f"  lives_snapshot: {read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)}")
     print(f"  progress      : {read_int(pm, level_obj + OFFSET_PROGRESS)}")
 
+# def level_watcher(pm, level_obj, stop_event):
+#     completed = set()
+#     last_level_id = None
+
+#     while not stop_event.is_set():
+#         try:
+#             current = read_int(pm, level_obj + OFFSET_LEVEL_ID)
+#             if last_level_id is not None and current == last_level_id + 1:
+#                 completed_id = last_level_id
+#                 if completed_id in completed:
+#                     print(f"\n  [watcher] Level {completed_id+1} COMPLETE (already seen)") # +1 for 1-based display
+#                 else:
+#                     completed.add(completed_id)
+#                     print(f"\n  [watcher] Level {completed_id+1} COMPLETE (new!)") # +1 for 1-based display
+#                 print("> ", end="", flush=True)
+#             last_level_id = current
+#         except Exception:
+#             pass
+#         stop_event.wait(0.1)
+
 def level_watcher(pm, level_obj, stop_event):
-    completed = set()
+    completed_levels = set()
+    completed_stages = set()
     last_level_id = None
+    last_stage = None
 
     while not stop_event.is_set():
         try:
-            current = read_int(pm, level_obj + OFFSET_LEVEL_ID)
-            if last_level_id is not None and current == last_level_id + 1:
+            current_level = read_int(pm, level_obj + OFFSET_LEVEL_ID)
+            current_stage = read_int(pm, level_obj + OFFSET_STAGE)
+
+            # stage checks (only stages 1 and 2, not 0)
+            if last_stage is not None and current_stage != last_stage:
+                if current_stage in (1, 2):
+                    check_key = (current_level, current_stage)
+                    if check_key in completed_stages:
+                        print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (already seen)")
+                    else:
+                        completed_stages.add(check_key)
+                        print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (new!)")
+                    print("> ", end="", flush=True)
+
+            # level completion check
+            if last_level_id is not None and current_level == last_level_id + 1:
                 completed_id = last_level_id
-                if completed_id in completed:
-                    print(f"\n  [watcher] Level {completed_id+1} COMPLETE (already seen)") # +1 for 1-based display
+                if completed_id in completed_levels:
+                    print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (already seen)")
                 else:
-                    completed.add(completed_id)
-                    print(f"\n  [watcher] Level {completed_id+1} COMPLETE (new!)") # +1 for 1-based display
+                    completed_levels.add(completed_id)
+                    print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (new!)")
                 print("> ", end="", flush=True)
-            last_level_id = current
+
+            last_level_id = current_level
+            last_stage = current_stage
         except Exception:
             pass
         stop_event.wait(0.1)
