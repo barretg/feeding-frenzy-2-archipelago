@@ -5,10 +5,20 @@ import ctypes.wintypes as wintypes
 import sys
 
 PROCESS_NAME = "popcapgame1.exe"
-LIVES_WRITE_OFFSET = 0x9C064
 
-DBG_CONTINUE = 0x00010002
-EXCEPTION_SINGLE_STEP = 0x80000004
+# breakpoint: level state object
+LEVEL_STATE_OFFSET = 0x9C064
+
+# confirmed offsets from level state object base
+OFFSET_LIVES          = 0x10
+OFFSET_SCORE          = 0x14
+OFFSET_STAGE          = 0x24
+OFFSET_LEVEL_ID       = 0x28
+OFFSET_SCORE_SNAPSHOT = 0x38
+OFFSET_LIVES_SNAPSHOT = 0x3C
+OFFSET_PROGRESS       = 0x40
+
+DBG_CONTINUE      = 0x00010002
 TH32CS_SNAPTHREAD = 0x00000004
 
 CONTEXT_DEBUG_REGISTERS = 0x00010010
@@ -34,10 +44,6 @@ Wow64GetThreadContext.restype = wintypes.BOOL
 Wow64SetThreadContext = ctypes.windll.kernel32.Wow64SetThreadContext
 Wow64SetThreadContext.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
 Wow64SetThreadContext.restype = wintypes.BOOL
-
-# known offsets from game object base
-OFFSET_LIVES    = 0x10
-OFFSET_PROGRESS = 0x40
 
 class THREADENTRY32(ctypes.Structure):
     _fields_ = [
@@ -112,8 +118,8 @@ class CONTEXT(ctypes.Structure):
         ("Edi",               wintypes.DWORD),
         ("Esi",               wintypes.DWORD),
         ("Ebx",               wintypes.DWORD),
-        ("Edx",               wintypes.DWORD),
         ("Ecx",               wintypes.DWORD),
+        ("Edx",               wintypes.DWORD),
         ("Eax",               wintypes.DWORD),
         ("Ebp",               wintypes.DWORD),
         ("Eip",               wintypes.DWORD),
@@ -143,13 +149,11 @@ def get_thread_handle(tid):
 
 def set_hardware_breakpoint(thread_handle, address):
     if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
-        print(f"  SuspendThread failed: {ctypes.windll.kernel32.GetLastError()}")
         return False
     try:
         ctx = CONTEXT()
         ctx.ContextFlags = CONTEXT_CAPTURE
         if not Wow64GetThreadContext(thread_handle, ctypes.byref(ctx)):
-            print(f"  Wow64GetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
             return False
 
         ctx.Dr0 = address
@@ -159,9 +163,7 @@ def set_hardware_breakpoint(thread_handle, address):
         ctx.ContextFlags = CONTEXT_CAPTURE
 
         if not Wow64SetThreadContext(thread_handle, ctypes.byref(ctx)):
-            print(f"  Wow64SetThreadContext failed: {ctypes.windll.kernel32.GetLastError()}")
             return False
-
         return True
     finally:
         ctypes.windll.kernel32.ResumeThread(thread_handle)
@@ -188,8 +190,8 @@ def set_bp_on_thread(tid, address):
         return ok
     return False
 
-def capture_game_object(pm, base):
-    target = base + LIVES_WRITE_OFFSET
+def capture_level_object(pm, base):
+    target = base + LEVEL_STATE_OFFSET
 
     code = pm.read_bytes(target, 8)
     print(f"Instruction bytes at 0x{target:08X}: {code.hex(' ')}")
@@ -203,27 +205,26 @@ def capture_game_object(pm, base):
     ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
 
     threads = get_process_threads(pm.process_id)
-    print(f"Found {len(threads)} existing threads, setting breakpoints...")
+    print(f"Found {len(threads)} threads, setting breakpoints...")
     for tid in threads:
         ok = set_bp_on_thread(tid, target)
         print(f"  Thread {tid}: {'ok' if ok else 'FAILED'}")
 
-    game_object = None
-    debug_event = DEBUG_EVENT()
+    level_object = None
+    debug_event  = DEBUG_EVENT()
 
-    while game_object is None:
+    while level_object is None:
         if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
             continue
 
         event_code = debug_event.dwDebugEventCode
-        tid = debug_event.dwThreadId
+        tid        = debug_event.dwThreadId
 
         if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
-            print(f"  New thread {tid}, setting breakpoint...")
-            set_bp_on_thread(tid, target)
+            pass  # don't touch thread during creation
 
         elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
-            code = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
             exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
 
             if exc_addr == target and code not in (0x80000003,):
@@ -242,11 +243,15 @@ def capture_game_object(pm, base):
                                     f"EDX=0x{ctx.Edx:08X} ESI=0x{ctx.Esi:08X} "
                                     f"EDI=0x{ctx.Edi:08X}"
                                 )
-                                game_object = eax
-                                print(f"  Game object base: 0x{game_object:08X}")
-                                print(f"  Lives   at: 0x{game_object + OFFSET_LIVES:08X}")
-                                print(f"  Progress at: 0x{game_object + OFFSET_PROGRESS:08X}")
-                                clear_hardware_breakpoint(th)
+                                if eip == target:
+                                    level_object = eax
+                                    print(f"  Level object base: 0x{level_object:08X}")
+                                    print(f"  lives    @ +0x{OFFSET_LIVES:02X} = 0x{level_object+OFFSET_LIVES:08X}")
+                                    print(f"  score    @ +0x{OFFSET_SCORE:02X} = 0x{level_object+OFFSET_SCORE:08X}")
+                                    print(f"  stage    @ +0x{OFFSET_STAGE:02X} = 0x{level_object+OFFSET_STAGE:08X}")
+                                    print(f"  level_id @ +0x{OFFSET_LEVEL_ID:02X} = 0x{level_object+OFFSET_LEVEL_ID:08X}")
+                                    print(f"  progress @ +0x{OFFSET_PROGRESS:02X} = 0x{level_object+OFFSET_PROGRESS:08X}")
+                                    clear_hardware_breakpoint(th)
                         finally:
                             ctypes.windll.kernel32.ResumeThread(th)
                     ctypes.windll.kernel32.CloseHandle(th)
@@ -258,8 +263,11 @@ def capture_game_object(pm, base):
             debug_event.dwProcessId, tid, DBG_CONTINUE
         )
 
-    ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-    return game_object
+        if level_object is not None:
+            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
+            break
+
+    return level_object
 
 def read_int(pm, address):
     buf = pm.read_bytes(address, 4)
@@ -276,12 +284,35 @@ def write_int(pm, address, value):
         ctypes.byref(written)
     )
 
+def dump_region(pm, base, count=128):
+    data = pm.read_bytes(base, count)
+    print(f"Dump from 0x{base:08X} ({count} bytes):")
+    for i in range(0, len(data), 16):
+        row = data[i:i+16]
+        hex_str  = ' '.join(f'{b:02X}' for b in row)
+        int_vals = ' | '.join(
+            f'{int.from_bytes(row[j:j+4], "little"):10d}'
+            for j in range(0, min(16, len(row)), 4)
+        )
+        print(f"  +0x{i:03X}  {hex_str:<48}  {int_vals}")
+
+def print_status(pm, level_obj):
+    print(f"--- Level State (base 0x{level_obj:08X}) ---")
+    print(f"  lives         : {read_int(pm, level_obj + OFFSET_LIVES)}")
+    print(f"  score         : {read_int(pm, level_obj + OFFSET_SCORE)}")
+    print(f"  stage         : {read_int(pm, level_obj + OFFSET_STAGE)}")
+    print(f"  level_id      : {read_int(pm, level_obj + OFFSET_LEVEL_ID)}")
+    print(f"  score_snapshot: {read_int(pm, level_obj + OFFSET_SCORE_SNAPSHOT)}")
+    print(f"  lives_snapshot: {read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)}")
+    print(f"  progress      : {read_int(pm, level_obj + OFFSET_PROGRESS)}")
+
 def print_help():
     print("Commands:")
-    print("  lives <n>     - set lives to n")
-    print("  progress <n>  - set level progress meter to n")
-    print("  read          - print current lives and progress values")
-    print("  quit          - exit")
+    print("  lives <n>    - set lives")
+    print("  progress <n> - set progress meter")
+    print("  status       - print all known values")
+    print("  dump [count] - hex dump level state region")
+    print("  quit         - exit")
 
 def main():
     print(f"Attaching to {PROCESS_NAME}...")
@@ -296,10 +327,7 @@ def main():
     ).lpBaseOfDll
     print(f"Base: 0x{base:08X}")
 
-    game_object = capture_game_object(pm, base)
-
-    lives_addr    = game_object + OFFSET_LIVES
-    progress_addr = game_object + OFFSET_PROGRESS
+    level_obj = capture_level_object(pm, base)
 
     print()
     print_help()
@@ -325,35 +353,33 @@ def main():
                 print("Usage: lives <n>")
                 continue
             try:
-                val = int(parts[1])
-                write_int(pm, lives_addr, val)
-                print(f"Lives set to {val}")
-            except ValueError:
-                print("Invalid number.")
+                write_int(pm, level_obj + OFFSET_LIVES, int(parts[1]))
+                print(f"Lives set to {parts[1]}")
             except Exception as e:
-                print(f"Write failed: {e}")
+                print(f"Failed: {e}")
 
         elif cmd == "progress":
             if len(parts) < 2:
                 print("Usage: progress <n>")
                 continue
             try:
-                val = int(parts[1])
-                write_int(pm, progress_addr, val)
-                print(f"Progress set to {val}")
-            except ValueError:
-                print("Invalid number.")
+                write_int(pm, level_obj + OFFSET_PROGRESS, int(parts[1]))
+                print(f"Progress set to {parts[1]}")
             except Exception as e:
-                print(f"Write failed: {e}")
+                print(f"Failed: {e}")
 
-        elif cmd == "read":
+        elif cmd == "status":
             try:
-                lives    = read_int(pm, lives_addr)
-                progress = read_int(pm, progress_addr)
-                print(f"Lives:    {lives}")
-                print(f"Progress: {progress}")
+                print_status(pm, level_obj)
             except Exception as e:
-                print(f"Read failed: {e}")
+                print(f"Failed: {e}")
+
+        elif cmd == "dump":
+            count = int(parts[1]) if len(parts) > 1 else 128
+            try:
+                dump_region(pm, level_obj, count)
+            except Exception as e:
+                print(f"Failed: {e}")
 
         else:
             print(f"Unknown command: {cmd}")
