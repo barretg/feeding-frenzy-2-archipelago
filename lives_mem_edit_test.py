@@ -16,8 +16,8 @@ OFFSET_LIVES          = 0x10
 OFFSET_SCORE          = 0x14
 OFFSET_STAGE          = 0x24
 OFFSET_LEVEL_ID       = 0x28
-OFFSET_SCORE_SNAPSHOT = 0x38
-OFFSET_LIVES_SNAPSHOT = 0x3C
+OFFSET_SCORE_SNAPSHOT = 0x30
+OFFSET_LIVES_SNAPSHOT = 0x34
 OFFSET_PROGRESS       = 0x40
 
 # max stage offset from ecx
@@ -141,7 +141,7 @@ class CONTEXT(ctypes.Structure):
 def max_allowed_stage(fish_received):
     next_zone_idx = fish_received + 1
     if next_zone_idx >= len(ZONE_BOUNDARIES):
-        return 999  # all zones unlocked
+        return 999
     return ZONE_BOUNDARIES[next_zone_idx] - 1
 
 def get_process_threads(pid):
@@ -405,6 +405,23 @@ def print_status(pm, level_obj, max_stage_addr, fish_received):
     else:
         print(f"--- Max Stage: not yet captured (complete a level) ---")
 
+def reset_to_boundary_level(pm, level_obj):
+    """Reset state so the player replays the boundary level."""
+    score_snapshot = read_int(pm, level_obj + OFFSET_SCORE_SNAPSHOT)
+    lives_snapshot = read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)
+    current_level  = read_int(pm, level_obj + OFFSET_LEVEL_ID)
+
+    # decrement level_id so next completion brings us back to same level
+    write_int(pm, level_obj + OFFSET_LEVEL_ID, current_level - 1)
+    # reset score and lives to start-of-level snapshots
+    write_int(pm, level_obj + OFFSET_SCORE, score_snapshot)
+    write_int(pm, level_obj + OFFSET_LIVES, lives_snapshot)
+    # reset progress
+    write_int(pm, level_obj + OFFSET_PROGRESS, 0)
+
+    print(f"\n  [watcher] Boundary reached — resetting to level {current_level} (id {current_level - 1})")
+    print(f"  [watcher] Score reset to {score_snapshot}, lives reset to {lives_snapshot}")
+
 def level_watcher(pm, level_obj, max_stage_addr, fish_received, stop_event):
     completed_levels = set()
     completed_stages = set()
@@ -462,6 +479,8 @@ def level_watcher(pm, level_obj, max_stage_addr, fish_received, stop_event):
                     if current_max > allowed:
                         write_int(pm, max_stage_addr[0], allowed)
                         print(f"\n  [watcher] mode0MaxStage clamped {current_max} -> {allowed} (fish_received={fish_received[0]})")
+                        # reset player to replay the boundary level
+                        reset_to_boundary_level(pm, level_obj)
                         print("> ", end="", flush=True)
                         last_max_stage = allowed
                     else:
