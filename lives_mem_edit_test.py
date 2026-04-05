@@ -23,6 +23,9 @@ OFFSET_PROGRESS       = 0x40
 # max stage offset from ecx
 OFFSET_MAX_STAGE = 0x58
 
+# zone boundaries (0-indexed level where each new zone starts)
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 49, 52, 55, 58, 61]
+
 DBG_CONTINUE      = 0x00010002
 TH32CS_SNAPTHREAD = 0x00000004
 
@@ -135,6 +138,12 @@ class CONTEXT(ctypes.Structure):
         ("ExtendedRegisters", ctypes.c_byte * 512),
     ]
 
+def max_allowed_stage(fish_received):
+    next_zone_idx = fish_received + 1
+    if next_zone_idx >= len(ZONE_BOUNDARIES):
+        return 999  # all zones unlocked
+    return ZONE_BOUNDARIES[next_zone_idx] - 1
+
 def get_process_threads(pid):
     snapshot = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
     threads = []
@@ -232,10 +241,10 @@ def capture_level_object(pm, base):
         event_code = debug_event.dwDebugEventCode
         tid        = debug_event.dwThreadId
 
-        if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
+        if event_code == 2:
             pass
 
-        elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
+        elif event_code == 1:
             code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
             exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
 
@@ -268,7 +277,7 @@ def capture_level_object(pm, base):
                             ctypes.windll.kernel32.ResumeThread(th)
                     ctypes.windll.kernel32.CloseHandle(th)
 
-        elif event_code == 3:  # CREATE_PROCESS_DEBUG_EVENT
+        elif event_code == 3:
             set_bp_on_thread(tid, target, 0)
 
         ctypes.windll.kernel32.ContinueDebugEvent(
@@ -282,7 +291,6 @@ def capture_level_object(pm, base):
     return level_object
 
 def capture_max_stage_object(pm, base, stop_event):
-    """Run in a thread — attaches debugger on first level completion to capture ecx at +0x9AED3."""
     target = base + MAX_STAGE_OFFSET
     print(f"  [maxstage] Waiting for level completion to capture max stage object...")
 
@@ -307,10 +315,10 @@ def capture_max_stage_object(pm, base, stop_event):
         event_code = debug_event.dwDebugEventCode
         tid        = debug_event.dwThreadId
 
-        if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
+        if event_code == 2:
             pass
 
-        elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
+        elif event_code == 1:
             code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
             exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
 
@@ -322,22 +330,25 @@ def capture_max_stage_object(pm, base, stop_event):
                             ctx = CONTEXT()
                             ctx.ContextFlags = CONTEXT_CAPTURE
                             if Wow64GetThreadContext(th, ctypes.byref(ctx)):
-                                print(f"  [maxstage] raw ecx from context: 0x{ctx.Ecx:08X}")
-                                print(f"  [maxstage] raw eax from context: 0x{ctx.Eax:08X}")
-                                print(f"  [maxstage] eip: 0x{ctx.Eip:08X}")
                                 if ctx.Eip == target:
                                     ecx = ctx.Ecx
-                                    max_stage_address = ecx + OFFSET_MAX_STAGE
-                                    print(f"\n  [maxstage] Captured ecx=0x{ecx:08X}")
-                                    print(f"  [maxstage] mode0MaxStage @ 0x{max_stage_address:08X}")
-                                    print(f"  [maxstage] Current value: {read_int(pm, max_stage_address)}")
-                                    print("> ", end="", flush=True)
-                                    clear_hardware_breakpoint(th, 0)
+                                    candidate = ecx + OFFSET_MAX_STAGE
+                                    value = read_int(pm, candidate)
+                                    if 0 <= value <= 100:
+                                        max_stage_address = candidate
+                                        print(f"\n  [maxstage] Captured ecx=0x{ecx:08X}")
+                                        print(f"  [maxstage] mode0MaxStage @ 0x{max_stage_address:08X}")
+                                        print(f"  [maxstage] Current value: {value}")
+                                        print("> ", end="", flush=True)
+                                        clear_hardware_breakpoint(th, 0)
+                                    else:
+                                        print(f"\n  [maxstage] Ignoring bad capture: ecx=0x{ecx:08X} value={value}")
+                                        print("> ", end="", flush=True)
                         finally:
                             ctypes.windll.kernel32.ResumeThread(th)
                     ctypes.windll.kernel32.CloseHandle(th)
 
-        elif event_code == 3:  # CREATE_PROCESS_DEBUG_EVENT
+        elif event_code == 3:
             set_bp_on_thread(tid, target, 0)
 
         ctypes.windll.kernel32.ContinueDebugEvent(
@@ -377,7 +388,7 @@ def dump_region(pm, base, count=128):
         )
         print(f"  +0x{i:03X}  {hex_str:<48}  {int_vals}")
 
-def print_status(pm, level_obj, max_stage_addr):
+def print_status(pm, level_obj, max_stage_addr, fish_received):
     print(f"--- Level State (base 0x{level_obj:08X}) ---")
     print(f"  lives         : {read_int(pm, level_obj + OFFSET_LIVES)}")
     print(f"  score         : {read_int(pm, level_obj + OFFSET_SCORE)}")
@@ -389,57 +400,87 @@ def print_status(pm, level_obj, max_stage_addr):
     if max_stage_addr:
         print(f"--- Max Stage (0x{max_stage_addr:08X}) ---")
         print(f"  mode0MaxStage : {read_int(pm, max_stage_addr)}")
+        print(f"  fish_received : {fish_received[0]}")
+        print(f"  max_allowed   : {max_allowed_stage(fish_received[0])}")
     else:
         print(f"--- Max Stage: not yet captured (complete a level) ---")
 
-def level_watcher(pm, level_obj, stop_event):
+def level_watcher(pm, level_obj, max_stage_addr, fish_received, stop_event):
     completed_levels = set()
     completed_stages = set()
-    last_level_id = None
-    last_stage = None
+    last_level_id    = None
+    last_stage       = None
+    last_max_stage   = None
+    stable_level_id  = None
+    stable_count     = 0
+    STABLE_THRESHOLD = 3
 
     while not stop_event.is_set():
         try:
             current_level = read_int(pm, level_obj + OFFSET_LEVEL_ID)
             current_stage = read_int(pm, level_obj + OFFSET_STAGE)
 
-            # stage checks (only stages 1 and 2, not 0)
-            if last_stage is not None and current_stage != last_stage:
-                if current_stage in (1, 2):
-                    check_key = (current_level, current_stage)
-                    if check_key in completed_stages:
-                        print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (already seen)")
+            # debounce level_id
+            if current_level == stable_level_id:
+                stable_count += 1
+            else:
+                stable_level_id = current_level
+                stable_count = 1
+
+            if stable_count >= STABLE_THRESHOLD:
+                current_level = stable_level_id
+
+                # stage checks (only stages 1 and 2)
+                if last_stage is not None and current_stage != last_stage:
+                    if current_stage in (1, 2):
+                        check_key = (current_level, current_stage)
+                        if check_key in completed_stages:
+                            print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (already seen)")
+                        else:
+                            completed_stages.add(check_key)
+                            print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (new!)")
+                        print("> ", end="", flush=True)
+
+                # level completion check
+                if last_level_id is not None and current_level == last_level_id + 1:
+                    completed_id = last_level_id
+                    if completed_id in completed_levels:
+                        print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (already seen)")
                     else:
-                        completed_stages.add(check_key)
-                        print(f"\n  [watcher] Level {current_level + 1} Stage {current_stage} COMPLETE (new!)")
+                        completed_levels.add(completed_id)
+                        print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (new!)")
                     print("> ", end="", flush=True)
 
-            # level completion check
-            if last_level_id is not None and current_level == last_level_id + 1:
-                completed_id = last_level_id
-                if completed_id in completed_levels:
-                    print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (already seen)")
-                else:
-                    completed_levels.add(completed_id)
-                    print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (new!)")
-                print("> ", end="", flush=True)
+                last_level_id = current_level
+                last_stage    = current_stage
 
-            last_level_id = current_level
-            last_stage = current_stage
+            # clamp mode0MaxStage only if it changed
+            if max_stage_addr[0] is not None:
+                current_max = read_int(pm, max_stage_addr[0])
+                if current_max != last_max_stage:
+                    allowed = max_allowed_stage(fish_received[0])
+                    if current_max > allowed:
+                        write_int(pm, max_stage_addr[0], allowed)
+                        print(f"\n  [watcher] mode0MaxStage clamped {current_max} -> {allowed} (fish_received={fish_received[0]})")
+                        print("> ", end="", flush=True)
+                        last_max_stage = allowed
+                    else:
+                        last_max_stage = current_max
+
         except Exception:
             pass
         stop_event.wait(0.1)
 
 def print_help():
     print("Commands:")
-    print("  lives <n>        - set lives")
-    print("  progress <n>     - set progress meter")
-    print("  maxstage <n>     - set mode0MaxStage directly")
-    print("  status           - print all known values")
-    print("  dump [count]     - hex dump level state region")
+    print("  lives <n>           - set lives")
+    print("  progress <n>        - set progress meter")
+    print("  maxstage <n>        - set mode0MaxStage directly")
+    print("  status              - print all known values")
+    print("  dump [count]        - hex dump level state region")
     print("  item <name> [delay] - grant an item (optionally after delay seconds)")
     print("    items: life, fish")
-    print("  quit             - exit")
+    print("  quit                - exit")
 
 def main():
     print(f"Attaching to {PROCESS_NAME}...")
@@ -456,9 +497,9 @@ def main():
 
     level_obj = capture_level_object(pm, base)
 
-    # shared mutable reference for max stage address
     max_stage_addr = [None]
-    stop_event = threading.Event()
+    fish_received  = [0]
+    stop_event     = threading.Event()
 
     def max_stage_capture_thread():
         result = capture_max_stage_object(pm, base, stop_event)
@@ -469,7 +510,7 @@ def main():
 
     watcher_thread = threading.Thread(
         target=level_watcher,
-        args=(pm, level_obj, stop_event),
+        args=(pm, level_obj, max_stage_addr, fish_received, stop_event),
         daemon=True
     )
     watcher_thread.start()
@@ -528,7 +569,7 @@ def main():
 
         elif cmd == "status":
             try:
-                print_status(pm, level_obj, max_stage_addr[0])
+                print_status(pm, level_obj, max_stage_addr[0], fish_received)
             except Exception as e:
                 print(f"Failed: {e}")
 
@@ -562,9 +603,14 @@ def main():
                         print(f"\n  [item] Max stage not yet captured — complete a level first.")
                     else:
                         try:
+                            fish_received[0] += 1
+                            allowed = max_allowed_stage(fish_received[0])
                             current = read_int(pm, max_stage_addr[0])
-                            write_int(pm, max_stage_addr[0], current + 1)
-                            print(f"\n  [item] Fish zone unlocked. mode0MaxStage: {current + 1}")
+                            if current < allowed:
+                                write_int(pm, max_stage_addr[0], allowed)
+                                print(f"\n  [item] Fish zone unlocked. mode0MaxStage: {allowed} (fish_received={fish_received[0]})")
+                            else:
+                                print(f"\n  [item] Fish zone unlocked (no change needed, already at {current}). fish_received={fish_received[0]}")
                         except Exception as e:
                             print(f"\n  [item] Failed: {e}")
                 else:
