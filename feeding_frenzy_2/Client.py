@@ -493,8 +493,16 @@ class FF2Context(CommonContext):
             allowed = max_allowed_stage(self.fish_received)
             current = read_int(self.pm, self.max_stage_addr)
             if current < allowed:
-                write_int(self.pm, self.max_stage_addr, allowed)
-                logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage: {allowed}")
+                # check if the gateway level (last level of previous zone) is already completed
+                # if so, set directly to the new boundary so player doesn't have to replay it
+                new_zone_start = ZONE_BOUNDARIES[self.fish_received] if self.fish_received < len(ZONE_BOUNDARIES) else 999
+                gateway_level_id = new_zone_start - 1  # 0-indexed
+                if gateway_level_id in self._completed_levels:
+                    write_int(self.pm, self.max_stage_addr, new_zone_start)
+                    logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage set to {new_zone_start} (gateway already cleared)")
+                else:
+                    write_int(self.pm, self.max_stage_addr, allowed)
+                    logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage: {allowed}")
         except Exception as e:
             logger.error(f"[FF2] Failed to apply fish item: {e}")
 
