@@ -1,6 +1,7 @@
 from typing import Dict, List
 from BaseClasses import Item, ItemClassification, Region, Tutorial
 from worlds.AutoWorld import WebWorld, World
+from worlds.LauncherComponents import Component, components, Type, launch_subprocess
 
 from .Items import FF2Item, ITEM_TABLE, item_name_to_id, item_descriptions
 from .Locations import (FF2Location, LOCATION_TABLE, ZONE_BOUNDARIES,
@@ -8,13 +9,31 @@ from .Locations import (FF2Location, LOCATION_TABLE, ZONE_BOUNDARIES,
                         fish_required_for_zone, zone_for_level_id)
 from .Options import FF2Options
 
-GAME_NAME             = "Feeding Frenzy 2"
-PROGRESSIVE_FISH_COUNT = 11   # number actually needed to reach the final boss
-EXTRA_FISH            = 2    # extra copies as filler
-TOTAL_FISH_ITEMS      = PROGRESSIVE_FISH_COUNT + EXTRA_FISH
-TOTAL_LOCATIONS       = len(LOCATION_TABLE)
-TOTAL_1UP_ITEMS       = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS
+GAME_NAME              = "Feeding Frenzy 2"
+PROGRESSIVE_FISH_COUNT = 11
+EXTRA_FISH             = 2
+TOTAL_FISH_ITEMS       = PROGRESSIVE_FISH_COUNT + EXTRA_FISH
+TOTAL_LOCATIONS        = len(LOCATION_TABLE)
+TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS
 
+
+# ── Launcher registration ─────────────────────────────────────────────────────
+
+def _launch_client(*args: str):
+    from .Client import main
+    launch_subprocess(main, name="Feeding Frenzy 2 Client", args=args)
+
+
+components.append(Component(
+    "Feeding Frenzy 2 Client",
+    func=_launch_client,
+    component_type=Type.CLIENT,
+    game_name=GAME_NAME,
+    description="Connect to the Archipelago server for Feeding Frenzy 2.",
+))
+
+
+# ── Web world ─────────────────────────────────────────────────────────────────
 
 class FF2WebWorld(WebWorld):
     theme = "ocean"
@@ -29,6 +48,8 @@ class FF2WebWorld(WebWorld):
         authors=["archipelago"],
     )]
 
+
+# ── World ─────────────────────────────────────────────────────────────────────
 
 class FF2World(World):
     """
@@ -58,21 +79,19 @@ class FF2World(World):
         menu_region = Region("Menu", self.player, self.multiworld)
         self.multiworld.regions.append(menu_region)
 
-        # One region per zone
         zone_regions: List[Region] = []
         for zone_idx in range(len(ZONE_BOUNDARIES)):
             zone_region = Region(f"Zone {zone_idx}", self.player, self.multiworld)
             self.multiworld.regions.append(zone_region)
             zone_regions.append(zone_region)
 
-        # Goal region for the final boss
         goal_region = Region("Goal", self.player, self.multiworld)
         self.multiworld.regions.append(goal_region)
 
-        # Menu → Zone 0 (free, no fish required)
+        # Menu → Zone 0 (free)
         menu_region.connect(zone_regions[0])
 
-        # Zone N → Zone N+1 (requires N+1 Progressive Fish)
+        # Zone N → Zone N+1 (requires N+1 fish)
         for zone_idx in range(len(ZONE_BOUNDARIES) - 1):
             fish_needed = zone_idx + 1
             zone_regions[zone_idx].connect(
@@ -88,7 +107,7 @@ class FF2World(World):
                 state.has("Progressive Fish", self.player, PROGRESSIVE_FISH_COUNT)
         )
 
-        # Place locations into their zone regions
+        # Place locations into zone regions
         for loc_name, loc_data in LOCATION_TABLE.items():
             zone_region = zone_regions[loc_data.zone]
             location = FF2Location(
