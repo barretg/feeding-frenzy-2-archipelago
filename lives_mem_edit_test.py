@@ -7,8 +7,9 @@ import threading
 
 PROCESS_NAME = "popcapgame1.exe"
 
-# breakpoint: level state object
-LEVEL_STATE_OFFSET = 0x9C064
+# breakpoint offsets
+LEVEL_STATE_OFFSET  = 0x9C064
+MAX_STAGE_OFFSET    = 0x9AED3
 
 # confirmed offsets from captured eax value
 OFFSET_LIVES          = 0x10
@@ -18,6 +19,9 @@ OFFSET_LEVEL_ID       = 0x28
 OFFSET_SCORE_SNAPSHOT = 0x38
 OFFSET_LIVES_SNAPSHOT = 0x3C
 OFFSET_PROGRESS       = 0x40
+
+# max stage offset from ecx
+OFFSET_MAX_STAGE = 0x58
 
 DBG_CONTINUE      = 0x00010002
 TH32CS_SNAPTHREAD = 0x00000004
@@ -119,8 +123,8 @@ class CONTEXT(ctypes.Structure):
         ("Edi",               wintypes.DWORD),
         ("Esi",               wintypes.DWORD),
         ("Ebx",               wintypes.DWORD),
-        ("Ecx",               wintypes.DWORD),
         ("Edx",               wintypes.DWORD),
+        ("Ecx",               wintypes.DWORD),
         ("Eax",               wintypes.DWORD),
         ("Ebp",               wintypes.DWORD),
         ("Eip",               wintypes.DWORD),
@@ -148,7 +152,7 @@ def get_process_threads(pid):
 def get_thread_handle(tid):
     return ctypes.windll.kernel32.OpenThread(THREAD_ACCESS, False, tid)
 
-def set_hardware_breakpoint(thread_handle, address):
+def set_hardware_breakpoint(thread_handle, address, dr_index=0):
     if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
         return False
     try:
@@ -157,10 +161,14 @@ def set_hardware_breakpoint(thread_handle, address):
         if not Wow64GetThreadContext(thread_handle, ctypes.byref(ctx)):
             return False
 
-        ctx.Dr0 = address
+        if dr_index == 0:
+            ctx.Dr0 = address
+        elif dr_index == 1:
+            ctx.Dr1 = address
+
         ctx.Dr6 = 0
-        ctx.Dr7 |= 0x1
-        ctx.Dr7 &= ~(0xF << 16)
+        ctx.Dr7 |= (0x1 << (dr_index * 2))
+        ctx.Dr7 &= ~(0xF << (16 + dr_index * 4))
         ctx.ContextFlags = CONTEXT_CAPTURE
 
         if not Wow64SetThreadContext(thread_handle, ctypes.byref(ctx)):
@@ -169,24 +177,27 @@ def set_hardware_breakpoint(thread_handle, address):
     finally:
         ctypes.windll.kernel32.ResumeThread(thread_handle)
 
-def clear_hardware_breakpoint(thread_handle):
+def clear_hardware_breakpoint(thread_handle, dr_index=0):
     if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
         return
     try:
         ctx = CONTEXT()
         ctx.ContextFlags = CONTEXT_CAPTURE
         Wow64GetThreadContext(thread_handle, ctypes.byref(ctx))
-        ctx.Dr0 = 0
-        ctx.Dr7 &= ~0x1
+        if dr_index == 0:
+            ctx.Dr0 = 0
+        elif dr_index == 1:
+            ctx.Dr1 = 0
+        ctx.Dr7 &= ~(0x1 << (dr_index * 2))
         ctx.ContextFlags = CONTEXT_CAPTURE
         Wow64SetThreadContext(thread_handle, ctypes.byref(ctx))
     finally:
         ctypes.windll.kernel32.ResumeThread(thread_handle)
 
-def set_bp_on_thread(tid, address):
+def set_bp_on_thread(tid, address, dr_index=0):
     th = get_thread_handle(tid)
     if th:
-        ok = set_hardware_breakpoint(th, address)
+        ok = set_hardware_breakpoint(th, address, dr_index)
         ctypes.windll.kernel32.CloseHandle(th)
         return ok
     return False
@@ -208,7 +219,7 @@ def capture_level_object(pm, base):
     threads = get_process_threads(pm.process_id)
     print(f"Found {len(threads)} threads, setting breakpoints...")
     for tid in threads:
-        ok = set_bp_on_thread(tid, target)
+        ok = set_bp_on_thread(tid, target, 0)
         print(f"  Thread {tid}: {'ok' if ok else 'FAILED'}")
 
     level_object = None
@@ -222,7 +233,7 @@ def capture_level_object(pm, base):
         tid        = debug_event.dwThreadId
 
         if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
-            pass  # don't touch thread during creation
+            pass
 
         elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
             code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
@@ -252,13 +263,13 @@ def capture_level_object(pm, base):
                                     print(f"  stage    @ +0x{OFFSET_STAGE:02X} = 0x{level_object+OFFSET_STAGE:08X}")
                                     print(f"  level_id @ +0x{OFFSET_LEVEL_ID:02X} = 0x{level_object+OFFSET_LEVEL_ID:08X}")
                                     print(f"  progress @ +0x{OFFSET_PROGRESS:02X} = 0x{level_object+OFFSET_PROGRESS:08X}")
-                                    clear_hardware_breakpoint(th)
+                                    clear_hardware_breakpoint(th, 0)
                         finally:
                             ctypes.windll.kernel32.ResumeThread(th)
                     ctypes.windll.kernel32.CloseHandle(th)
 
         elif event_code == 3:  # CREATE_PROCESS_DEBUG_EVENT
-            set_bp_on_thread(tid, target)
+            set_bp_on_thread(tid, target, 0)
 
         ctypes.windll.kernel32.ContinueDebugEvent(
             debug_event.dwProcessId, tid, DBG_CONTINUE
@@ -269,6 +280,75 @@ def capture_level_object(pm, base):
             break
 
     return level_object
+
+def capture_max_stage_object(pm, base, stop_event):
+    """Run in a thread — attaches debugger on first level completion to capture ecx at +0x9AED3."""
+    target = base + MAX_STAGE_OFFSET
+    print(f"  [maxstage] Waiting for level completion to capture max stage object...")
+
+    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
+        err = ctypes.windll.kernel32.GetLastError()
+        print(f"  [maxstage] Failed to attach debugger. Error: {err}")
+        return None
+
+    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+
+    threads = get_process_threads(pm.process_id)
+    for tid in threads:
+        set_bp_on_thread(tid, target, 0)
+
+    max_stage_address = None
+    debug_event = DEBUG_EVENT()
+
+    while not stop_event.is_set() and max_stage_address is None:
+        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
+            continue
+
+        event_code = debug_event.dwDebugEventCode
+        tid        = debug_event.dwThreadId
+
+        if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
+            pass
+
+        elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
+            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
+
+            if exc_addr == target and code not in (0x80000003,):
+                th = get_thread_handle(tid)
+                if th:
+                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
+                        try:
+                            ctx = CONTEXT()
+                            ctx.ContextFlags = CONTEXT_CAPTURE
+                            if Wow64GetThreadContext(th, ctypes.byref(ctx)):
+                                print(f"  [maxstage] raw ecx from context: 0x{ctx.Ecx:08X}")
+                                print(f"  [maxstage] raw eax from context: 0x{ctx.Eax:08X}")
+                                print(f"  [maxstage] eip: 0x{ctx.Eip:08X}")
+                                if ctx.Eip == target:
+                                    ecx = ctx.Ecx
+                                    max_stage_address = ecx + OFFSET_MAX_STAGE
+                                    print(f"\n  [maxstage] Captured ecx=0x{ecx:08X}")
+                                    print(f"  [maxstage] mode0MaxStage @ 0x{max_stage_address:08X}")
+                                    print(f"  [maxstage] Current value: {read_int(pm, max_stage_address)}")
+                                    print("> ", end="", flush=True)
+                                    clear_hardware_breakpoint(th, 0)
+                        finally:
+                            ctypes.windll.kernel32.ResumeThread(th)
+                    ctypes.windll.kernel32.CloseHandle(th)
+
+        elif event_code == 3:  # CREATE_PROCESS_DEBUG_EVENT
+            set_bp_on_thread(tid, target, 0)
+
+        ctypes.windll.kernel32.ContinueDebugEvent(
+            debug_event.dwProcessId, tid, DBG_CONTINUE
+        )
+
+        if max_stage_address is not None:
+            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
+            break
+
+    return max_stage_address
 
 def read_int(pm, address):
     buf = pm.read_bytes(address, 4)
@@ -297,7 +377,7 @@ def dump_region(pm, base, count=128):
         )
         print(f"  +0x{i:03X}  {hex_str:<48}  {int_vals}")
 
-def print_status(pm, level_obj):
+def print_status(pm, level_obj, max_stage_addr):
     print(f"--- Level State (base 0x{level_obj:08X}) ---")
     print(f"  lives         : {read_int(pm, level_obj + OFFSET_LIVES)}")
     print(f"  score         : {read_int(pm, level_obj + OFFSET_SCORE)}")
@@ -306,26 +386,11 @@ def print_status(pm, level_obj):
     print(f"  score_snapshot: {read_int(pm, level_obj + OFFSET_SCORE_SNAPSHOT)}")
     print(f"  lives_snapshot: {read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)}")
     print(f"  progress      : {read_int(pm, level_obj + OFFSET_PROGRESS)}")
-
-# def level_watcher(pm, level_obj, stop_event):
-#     completed = set()
-#     last_level_id = None
-
-#     while not stop_event.is_set():
-#         try:
-#             current = read_int(pm, level_obj + OFFSET_LEVEL_ID)
-#             if last_level_id is not None and current == last_level_id + 1:
-#                 completed_id = last_level_id
-#                 if completed_id in completed:
-#                     print(f"\n  [watcher] Level {completed_id+1} COMPLETE (already seen)") # +1 for 1-based display
-#                 else:
-#                     completed.add(completed_id)
-#                     print(f"\n  [watcher] Level {completed_id+1} COMPLETE (new!)") # +1 for 1-based display
-#                 print("> ", end="", flush=True)
-#             last_level_id = current
-#         except Exception:
-#             pass
-#         stop_event.wait(0.1)
+    if max_stage_addr:
+        print(f"--- Max Stage (0x{max_stage_addr:08X}) ---")
+        print(f"  mode0MaxStage : {read_int(pm, max_stage_addr)}")
+    else:
+        print(f"--- Max Stage: not yet captured (complete a level) ---")
 
 def level_watcher(pm, level_obj, stop_event):
     completed_levels = set()
@@ -367,12 +432,14 @@ def level_watcher(pm, level_obj, stop_event):
 
 def print_help():
     print("Commands:")
-    print("  lives <n>       - set lives")
-    print("  progress <n>    - set progress meter")
-    print("  item <name> <n> - grant 1 item (e.g. life) after n seconds")
-    print("  status          - print all known values")
-    print("  dump [count]    - hex dump level state region")
-    print("  quit            - exit")
+    print("  lives <n>        - set lives")
+    print("  progress <n>     - set progress meter")
+    print("  maxstage <n>     - set mode0MaxStage directly")
+    print("  status           - print all known values")
+    print("  dump [count]     - hex dump level state region")
+    print("  item <name> [delay] - grant an item (optionally after delay seconds)")
+    print("    items: life, fish")
+    print("  quit             - exit")
 
 def main():
     print(f"Attaching to {PROCESS_NAME}...")
@@ -389,7 +456,17 @@ def main():
 
     level_obj = capture_level_object(pm, base)
 
+    # shared mutable reference for max stage address
+    max_stage_addr = [None]
     stop_event = threading.Event()
+
+    def max_stage_capture_thread():
+        result = capture_max_stage_object(pm, base, stop_event)
+        if result:
+            max_stage_addr[0] = result
+
+    threading.Thread(target=max_stage_capture_thread, daemon=True).start()
+
     watcher_thread = threading.Thread(
         target=level_watcher,
         args=(pm, level_obj, stop_event),
@@ -436,9 +513,22 @@ def main():
             except Exception as e:
                 print(f"Failed: {e}")
 
+        elif cmd == "maxstage":
+            if len(parts) < 2:
+                print("Usage: maxstage <n>")
+                continue
+            if not max_stage_addr[0]:
+                print("Max stage not yet captured — complete a level first.")
+                continue
+            try:
+                write_int(pm, max_stage_addr[0], int(parts[1]))
+                print(f"mode0MaxStage set to {parts[1]}")
+            except Exception as e:
+                print(f"Failed: {e}")
+
         elif cmd == "status":
             try:
-                print_status(pm, level_obj)
+                print_status(pm, level_obj, max_stage_addr[0])
             except Exception as e:
                 print(f"Failed: {e}")
 
@@ -467,6 +557,16 @@ def main():
                         print(f"\n  [item] Life granted. Lives: {current + 1}")
                     except Exception as e:
                         print(f"\n  [item] Failed: {e}")
+                elif item_name == "fish":
+                    if not max_stage_addr[0]:
+                        print(f"\n  [item] Max stage not yet captured — complete a level first.")
+                    else:
+                        try:
+                            current = read_int(pm, max_stage_addr[0])
+                            write_int(pm, max_stage_addr[0], current + 1)
+                            print(f"\n  [item] Fish zone unlocked. mode0MaxStage: {current + 1}")
+                        except Exception as e:
+                            print(f"\n  [item] Failed: {e}")
                 else:
                     print(f"\n  [item] Unknown item: {item_name}")
                 print("> ", end="", flush=True)
