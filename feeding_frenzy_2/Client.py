@@ -477,6 +477,9 @@ class FF2Context(CommonContext):
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
+                source = args.get("data", {}).get("source", "")
+                if source == self.player_names.get(self.slot, ""):
+                    return # ignore DeathLinks originating from this client
                 if self.game_ready and self.level_obj:
                     try:
                         current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
