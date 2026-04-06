@@ -437,17 +437,17 @@ class FF2Context(CommonContext):
         self.game_ready:      bool                  = False
 
         # watcher state
-        self._stop_event             = threading.Event()
-        self._last_level_id:         Optional[int] = None
-        self._last_stage:            Optional[int] = None
-        self._last_max_stage:        Optional[int] = None
-        self._last_lives:            Optional[int] = None
-        self._stable_level_id:       Optional[int] = None
-        self._stable_count:          int           = 0
-        self._completed_levels:      set           = set()
-        self._completed_stages:      set           = set()
-        self._death_link_enabled:    bool          = False
-        self._applying_death_link:   bool          = False
+        self._stop_event                    = threading.Event()
+        self._last_level_id:                Optional[int] = None
+        self._last_stage:                   Optional[int] = None
+        self._last_max_stage:               Optional[int] = None
+        self._last_lives:                   Optional[int] = None
+        self._stable_level_id:              Optional[int] = None
+        self._stable_count:                 int           = 0
+        self._completed_levels:             set           = set()
+        self._completed_stages:             set           = set()
+        self._death_link_enabled:           bool          = False
+        self._death_link_written_lives:     Optional[int] = False
 
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
@@ -482,15 +482,14 @@ class FF2Context(CommonContext):
                 if source == self.player_names.get(self.slot, ""):
                     return # ignore DeathLinks originating from this client
                 if self.game_ready and self.level_obj:
-                    self._applying_death_link = True
                     try:
                         current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
-                        write_int(self.pm, self.level_obj + OFFSET_LIVES, max(0, current - 1))
+                        new_val = max(0, current - 1)
+                        write_int(self.pm, self.level_obj + OFFSET_LIVES, new_val)
+                        self._death_link_written_lives = new_val
                         logger.info(f"[FF2] DeathLink received — lives: {max(0, current - 1)}")
                     except Exception as e:
                         logger.error(f"[FF2] DeathLink apply failed: {e}")
-                    finally:
-                        self._applying_death_link = False
 
 
     def _apply_fish_item(self):
@@ -646,9 +645,12 @@ async def game_watcher(ctx: FF2Context):
 
             # ── DeathLink send ────────────────────────────────────────────
             if ctx._last_lives is not None and current_lives == ctx._last_lives - 1:
-                if not ctx._applying_death_link:
+                if ctx._death_link_written_lives == current_lives:
+                    ctx._death_link_written_lives = None  # this decrement was ours, ignore
+                else:
                     ctx._send_death_link()
                     logger.info(f"[FF2] DeathLink sent (lives: {ctx._last_lives} → {current_lives})")
+            ctx._last_lives = current_lives
             ctx._last_lives = current_lives
 
             # ── clamp mode0MaxStage ───────────────────────────────────────
