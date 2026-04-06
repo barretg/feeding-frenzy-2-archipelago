@@ -1,0 +1,117 @@
+Execution flow going into death loop
+
+
+(more continues above this)
+
+popcapgame1.exe+47F6E - 8B B3 94020000        - mov esi,[ebx+00000294]
+popcapgame1.exe+47F74 - 8D BB 98020000        - lea edi,[ebx+00000298]
+popcapgame1.exe+47F7A - 3B 37                 - cmp esi,[edi]
+popcapgame1.exe+47F7C - 0F87 B19D0A00         - ja popcapgame1.exe+F1D33
+popcapgame1.exe+47F82 - 0F83 B79D0A00         - jae popcapgame1.exe+F1D3F
+
+
+popcapgame1.exe+F1D3F - E8 A281FBFF           - call popcapgame1.exe+A9EE6
+
+>>>
+
+(this function has a *LOT* of stuff calling it or jumping to it from a LOT of different places, so thinking is important)
+
+popcapgame1.exe+A9EE6 - 33 C0                 - xor eax,eax
+popcapgame1.exe+A9EE8 - 50                    - push eax
+popcapgame1.exe+A9EE9 - 50                    - push eax
+popcapgame1.exe+A9EEA - 50                    - push eax
+popcapgame1.exe+A9EEB - 50                    - push eax
+popcapgame1.exe+A9EEC - 50                    - push eax
+popcapgame1.exe+A9EED - E8 D0FFFFFF           - call popcapgame1.exe+A9EC2
+
+>>>>>>
+
+popcapgame1.exe+A9EC2 - 55                    - push ebp
+popcapgame1.exe+A9EC3 - 8B EC                 - mov ebp,esp
+popcapgame1.exe+A9EC5 - FF 35 E0AE5A00        - push [popcapgame1.exe+1AAEE0] { (1691554784) }
+popcapgame1.exe+A9ECB - E8 86360000           - call popcapgame1.exe+AD556
+popcapgame1.exe+A9ED0 - 85 C0                 - test eax,eax
+popcapgame1.exe+A9ED2 - 59                    - pop ecx
+popcapgame1.exe+A9ED3 - 74 03                 - je popcapgame1.exe+A9ED8
+popcapgame1.exe+A9ED5 - 5D                    - pop ebp
+popcapgame1.exe+A9ED6 - FF E0                 - jmp eax
+popcapgame1.exe+A9ED8 - 6A 02                 - push 02 { 2 }
+popcapgame1.exe+A9EDA - E8 7B350000           - call popcapgame1.exe+AD45A
+popcapgame1.exe+A9EDF - 59                    - pop ecx
+popcapgame1.exe+A9EE0 - 5D                    - pop ebp
+popcapgame1.exe+A9EE1 - E9 E0FEFFFF           - jmp popcapgame1.exe+A9DC6
+
+popcapgame1.exe+A9DC6 - 55                    - push ebp
+popcapgame1.exe+A9DC7 - 8D AC 24 58FDFFFF     - lea ebp,[esp-000002A8]
+popcapgame1.exe+A9DCE - 81 EC 28030000        - sub esp,00000328 { 808 }
+popcapgame1.exe+A9DD4 - A1 A4205900           - mov eax,[popcapgame1.exe+1920A4] { (-1285295579) }
+popcapgame1.exe+A9DD9 - 33 C5                 - xor eax,ebp
+popcapgame1.exe+A9DDB - 89 85 A4020000        - mov [ebp+000002A4],eax
+popcapgame1.exe+A9DE1 - 56                    - push esi
+popcapgame1.exe+A9DE2 - 89 85 88000000        - mov [ebp+00000088],eax
+popcapgame1.exe+A9DE8 - 89 8D 84000000        - mov [ebp+00000084],ecx
+popcapgame1.exe+A9DEE - 89 95 80000000        - mov [ebp+00000080],edx
+popcapgame1.exe+A9DF4 - 89 5D 7C              - mov [ebp+7C],ebx
+popcapgame1.exe+A9DF7 - 89 75 78              - mov [ebp+78],esi
+popcapgame1.exe+A9DFA - 89 7D 74              - mov [ebp+74],edi
+popcapgame1.exe+A9DFD - 66 8C 95 A0000000     - mov [ebp+000000A0],ss
+popcapgame1.exe+A9E04 - 66 8C 8D 94000000     - mov [ebp+00000094],cs
+popcapgame1.exe+A9E0B - 66 8C 5D 70           - mov [ebp+70],ds
+popcapgame1.exe+A9E0F - 66 8C 45 6C           - mov [ebp+6C],es
+popcapgame1.exe+A9E13 - 66 8C 65 68           - mov [ebp+68],fs
+popcapgame1.exe+A9E17 - 66 8C 6D 64           - mov [ebp+64],gs
+popcapgame1.exe+A9E1B - 9C                    - pushfd 
+popcapgame1.exe+A9E1C - 8F 85 98000000        - pop [ebp+00000098]
+popcapgame1.exe+A9E22 - 8B B5 AC020000        - mov esi,[ebp+000002AC]
+popcapgame1.exe+A9E28 - 8D 85 AC020000        - lea eax,[ebp+000002AC]
+popcapgame1.exe+A9E2E - 89 85 9C000000        - mov [ebp+0000009C],eax
+popcapgame1.exe+A9E34 - C7 45 D8 01000100     - mov [ebp-28],00010001 { (0) }
+popcapgame1.exe+A9E3B - 89 B5 90000000        - mov [ebp+00000090],esi
+popcapgame1.exe+A9E41 - 8B 40 FC              - mov eax,[eax-04]
+popcapgame1.exe+A9E44 - 6A 50                 - push 50 { 80 }
+popcapgame1.exe+A9E46 - 89 85 8C000000        - mov [ebp+0000008C],eax
+popcapgame1.exe+A9E4C - 8D 45 80              - lea eax,[ebp-80]
+popcapgame1.exe+A9E4F - 6A 00                 - push 00 { 0 }
+popcapgame1.exe+A9E51 - 50                    - push eax
+popcapgame1.exe+A9E52 - E8 19360000           - call popcapgame1.exe+AD470
+popcapgame1.exe+A9E57 - 8D 45 80              - lea eax,[ebp-80]
+popcapgame1.exe+A9E5A - 89 45 D0              - mov [ebp-30],eax
+popcapgame1.exe+A9E5D - 8D 45 D8              - lea eax,[ebp-28]
+popcapgame1.exe+A9E60 - 83 C4 0C              - add esp,0C { 12 }
+popcapgame1.exe+A9E63 - C7 45 80 0D0000C0     - mov [ebp-80],C000000D { -2.00 }
+popcapgame1.exe+A9E6A - 89 75 8C              - mov [ebp-74],esi
+popcapgame1.exe+A9E6D - 89 45 D4              - mov [ebp-2C],eax
+popcapgame1.exe+A9E70 - FF 15 C4605400        - call dword ptr [popcapgame1.exe+1460C4] { ->->KERNELBASE.IsDebuggerPresent }
+popcapgame1.exe+A9E76 - 6A 00                 - push 00 { 0 }
+popcapgame1.exe+A9E78 - 8B F0                 - mov esi,eax
+popcapgame1.exe+A9E7A - FF 15 C0605400        - call dword ptr [popcapgame1.exe+1460C0] { ->KERNEL32.SetUnhandledExceptionFilter }
+popcapgame1.exe+A9E80 - 8D 45 D0              - lea eax,[ebp-30]
+popcapgame1.exe+A9E83 - 50                    - push eax
+popcapgame1.exe+A9E84 - FF 15 BC605400        - call dword ptr [popcapgame1.exe+1460BC] { ->KERNEL32.UnhandledExceptionFilter }
+popcapgame1.exe+A9E8A - 85 C0                 - test eax,eax
+popcapgame1.exe+A9E8C - 75 0C                 - jne popcapgame1.exe+A9E9A
+popcapgame1.exe+A9E8E - 85 F6                 - test esi,esi
+popcapgame1.exe+A9E90 - 75 08                 - jne popcapgame1.exe+A9E9A
+popcapgame1.exe+A9E92 - 6A 02                 - push 02 { 2 }
+popcapgame1.exe+A9E94 - E8 C1350000           - call popcapgame1.exe+AD45A
+popcapgame1.exe+A9E99 - 59                    - pop ecx
+popcapgame1.exe+A9E9A - 68 0D0000C0           - push C000000D { -2.00 }
+popcapgame1.exe+A9E9F - FF 15 B8605400        - call dword ptr [popcapgame1.exe+1460B8] { ->KERNEL32.GetCurrentProcess }
+popcapgame1.exe+A9EA5 - 50                    - push eax
+popcapgame1.exe+A9EA6 - FF 15 B4605400        - call dword ptr [popcapgame1.exe+1460B4] { ->KERNEL32.TerminateProcess }
+popcapgame1.exe+A9EAC - 8B 8D A4020000        - mov ecx,[ebp+000002A4]
+popcapgame1.exe+A9EB2 - 33 CD                 - xor ecx,ebp
+popcapgame1.exe+A9EB4 - 5E                    - pop esi
+popcapgame1.exe+A9EB5 - E8 C8FDFFFF           - call popcapgame1.exe+A9C82
+popcapgame1.exe+A9EBA - 81 C5 A8020000        - add ebp,000002A8 { 680 }
+popcapgame1.exe+A9EC0 - C9                    - leave 
+popcapgame1.exe+A9EC1 - C3                    - ret 
+
+>>>>>> (returns maybe?)
+
+popcapgame1.exe+A9EF2 - 83 C4 14              - add esp,14 { 20 }
+popcapgame1.exe+A9EF5 - C3                    - ret 
+
+>>> (returns)
+
+popcapgame1.exe+F1D44 - E9 3F62F5FF           - jmp popcapgame1.exe+47F88 (goes to the mov esi, [esi])
