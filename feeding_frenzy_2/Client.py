@@ -504,9 +504,9 @@ class FF2Context(CommonContext):
                 if gateway_level_id in self._completed_levels:
                     write_int(self.pm, self.max_stage_addr, new_zone_start)
                     logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage set to {new_zone_start} (gateway already cleared)")
-                else:
-                    write_int(self.pm, self.max_stage_addr, allowed)
-                    logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage: {allowed}")
+                # else:
+                #     write_int(self.pm, self.max_stage_addr, allowed)
+                #     logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage: {allowed}")
         except Exception as e:
             logger.error(f"[FF2] Failed to apply fish item: {e}")
 
