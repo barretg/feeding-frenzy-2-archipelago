@@ -32,6 +32,12 @@ OFFSET_SCORE_SNAPSHOT = 0x30
 OFFSET_LIVES_SNAPSHOT = 0x34
 OFFSET_PROGRESS       = 0x40
 
+# ── Player fish struct offsets ────────────────────────────────────────────────
+PLAYER_FISH_OFFSET    = 0x38D47
+OFFSET_SUB_OBJECT     = 0x8C
+OFFSET_RESPAWN_FLAG   = 0x98
+DEATH_FUNC            = 0x00404E10
+
 # ── Max stage offset from ecx ─────────────────────────────────────────────────
 OFFSET_MAX_STAGE = 0x58
 
@@ -449,6 +455,10 @@ class FF2Context(CommonContext):
         self._death_link_enabled:           bool          = False
         self._death_link_written_lives:     Optional[int] = False
 
+        # fishy state
+        self.player_fish:    Optional[int] = None
+        self.sub_object:     Optional[int] = None
+
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
             await super().server_auth(password_requested)
@@ -480,14 +490,13 @@ class FF2Context(CommonContext):
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
                 source = args.get("data", {}).get("source", "")
                 if source == self.player_names.get(self.slot, ""):
-                    return # ignore DeathLinks originating from this client
-                if self.game_ready and self.level_obj:
+                    return
+                if self.game_ready and self.player_fish and self.sub_object:
                     try:
                         current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
-                        new_val = max(0, current - 1)
-                        write_int(self.pm, self.level_obj + OFFSET_LIVES, new_val)
-                        self._death_link_written_lives = new_val
-                        logger.info(f"[FF2] DeathLink received — lives: {max(0, current - 1)}")
+                        self._death_link_written_lives = max(0, current - 1)
+                        trigger_death(self.pm, self.player_fish, self.sub_object)
+                        logger.info(f"[FF2] DeathLink received — triggering death")
                     except Exception as e:
                         logger.error(f"[FF2] DeathLink apply failed: {e}")
 
@@ -542,6 +551,54 @@ class FF2Context(CommonContext):
                 },
             }]))
 
+# ── Deathlink routine ───────────────────────────────────────────────────────────────
+def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
+    MEM_COMMIT             = 0x1000
+    MEM_RESERVE            = 0x2000
+    PAGE_EXECUTE_READWRITE = 0x40
+
+    cave = ctypes.windll.kernel32.VirtualAllocEx(
+        pm.process_handle, None, 64,
+        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+    )
+    if not cave:
+        return False
+
+    call_site  = cave + 6
+    rel_offset = (DEATH_FUNC - (call_site + 5)) & 0xFFFFFFFF
+
+    shellcode = bytearray([
+        0x51,
+        0xB9, *sub_object.to_bytes(4, 'little'),
+        0xE8, *rel_offset.to_bytes(4, 'little'),
+        0x59,
+        0xC3,
+    ])
+
+    written = ctypes.c_size_t(0)
+    ctypes.windll.kernel32.WriteProcessMemory(
+        pm.process_handle, ctypes.c_void_p(cave),
+        bytes(shellcode), len(shellcode), ctypes.byref(written)
+    )
+
+    thread = ctypes.windll.kernel32.CreateRemoteThread(
+        pm.process_handle, None, 0,
+        ctypes.c_void_p(cave), None, 0, None
+    )
+    if not thread:
+        ctypes.windll.kernel32.VirtualFreeEx(
+            pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+        )
+        return False
+
+    ctypes.windll.kernel32.WaitForSingleObject(thread, 3000)
+    ctypes.windll.kernel32.CloseHandle(thread)
+    ctypes.windll.kernel32.VirtualFreeEx(
+        pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+    )
+
+    write_int(pm, player_fish + OFFSET_RESPAWN_FLAG, 0)
+    return True
 
 # ── Game watcher loop ─────────────────────────────────────────────────────────
 
@@ -593,6 +650,20 @@ async def game_watcher(ctx: FF2Context):
                 ctx._apply_fish_item()
 
     Utils.async_start(_capture_max_stage())
+
+    # capture player fish after level object is captured (guaranteed to be available at this point)
+    async def _capture_player_fish():
+        target = base + PLAYER_FISH_OFFSET
+        # reuse same debug capture pattern as max stage
+        result = await loop.run_in_executor(
+            None, _do_capture_player_fish, pm, target, ctx._stop_event
+        )
+        if result:
+            ctx.player_fish = result["player_fish"]
+            ctx.sub_object  = result["sub_object"]
+            logger.info(f"[FF2] Player fish: 0x{ctx.player_fish:08X} sub: 0x{ctx.sub_object:08X}")
+
+    Utils.async_start(_capture_player_fish())
 
     # main poll loop
     while not ctx.exit_event.is_set():
@@ -673,6 +744,52 @@ async def game_watcher(ctx: FF2Context):
 
     ctx._stop_event.set()
 
+def _do_capture_player_fish(pm, target, stop_event):
+    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
+        return None
+    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+    for tid in get_process_threads(pm.process_id):
+        set_bp_on_thread(tid, target, 0)
+
+    result      = None
+    debug_event = DEBUG_EVENT()
+    while not stop_event.is_set() and result is None:
+        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
+            continue
+        event_code = debug_event.dwDebugEventCode
+        tid        = debug_event.dwThreadId
+        if event_code == 1:
+            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
+            if exc_addr == target and code not in (0x80000003,):
+                th = get_thread_handle(tid)
+                if th:
+                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
+                        try:
+                            ctx_ = CONTEXT()
+                            ctx_.ContextFlags = CONTEXT_CAPTURE
+                            if Wow64GetThreadContext(th, ctypes.byref(ctx_)) and ctx_.Eip == target:
+                                ecx = ctx_.Ecx
+                                if ecx:
+                                    try:
+                                        sub = read_int(pm, ecx + OFFSET_SUB_OBJECT)
+                                        if sub:
+                                            result = {"player_fish": ecx, "sub_object": sub}
+                                            clear_hardware_breakpoint(th, 0)
+                                    except Exception:
+                                        pass
+                        finally:
+                            ctypes.windll.kernel32.ResumeThread(th)
+                    ctypes.windll.kernel32.CloseHandle(th)
+        elif event_code == 3:
+            set_bp_on_thread(tid, target, 0)
+        ctypes.windll.kernel32.ContinueDebugEvent(
+            debug_event.dwProcessId, tid, DBG_CONTINUE
+        )
+        if result is not None:
+            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
+            break
+    return result
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
