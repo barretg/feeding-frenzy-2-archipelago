@@ -485,6 +485,71 @@ def level_watcher(pm, level_obj, max_stage_addr, fish_received, player_info, sto
             pass
         stop_event.wait(0.1)
 
+def trigger_death(pm, player_fish, sub_object):
+    """Call the player death function then trigger respawn loop."""
+    DEATH_FUNC = 0x00404E10
+
+    MEM_COMMIT             = 0x1000
+    MEM_RESERVE            = 0x2000
+    PAGE_EXECUTE_READWRITE = 0x40
+
+    cave = ctypes.windll.kernel32.VirtualAllocEx(
+        pm.process_handle,
+        None,
+        64,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE
+    )
+    if not cave:
+        print(f"VirtualAllocEx failed: {ctypes.windll.kernel32.GetLastError()}")
+        return False
+
+    call_site  = cave + 6
+    rel_offset = (DEATH_FUNC - (call_site + 5)) & 0xFFFFFFFF
+
+    shellcode = bytearray([
+        0x51,                                       # push ecx
+        0xB9,                                       # mov ecx, imm32
+        *sub_object.to_bytes(4, 'little'),          # sub_object address
+        0xE8,                                       # call rel32
+        *rel_offset.to_bytes(4, 'little'),          # relative offset to death func
+        0x59,                                       # pop ecx
+        0xC3,                                       # ret
+    ])
+
+    written = ctypes.c_size_t(0)
+    ctypes.windll.kernel32.WriteProcessMemory(
+        pm.process_handle,
+        ctypes.c_void_p(cave),
+        bytes(shellcode),
+        len(shellcode),
+        ctypes.byref(written)
+    )
+
+    thread = ctypes.windll.kernel32.CreateRemoteThread(
+        pm.process_handle,
+        None, 0,
+        ctypes.c_void_p(cave),
+        None, 0, None
+    )
+    if not thread:
+        print(f"CreateRemoteThread failed: {ctypes.windll.kernel32.GetLastError()}")
+        ctypes.windll.kernel32.VirtualFreeEx(
+            pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+        )
+        return False
+
+    ctypes.windll.kernel32.WaitForSingleObject(thread, 3000)
+    ctypes.windll.kernel32.CloseHandle(thread)
+    ctypes.windll.kernel32.VirtualFreeEx(
+        pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+    )
+
+    # trigger respawn loop by zeroing the respawn flag
+    write_int(pm, player_fish + 0x98, 0)
+
+    return True
+
 def print_help():
     print("Commands:")
     print("  lives <n>           - set lives")
@@ -495,6 +560,7 @@ def print_help():
     print("  dump player [count] - hex dump player sub-object region")
     print("  item <name> [delay] - grant an item (optionally after delay seconds)")
     print("    items: life, fish")
+    print("  die                 - trigger player death")
     print("  quit                - exit")
 
 def main():
@@ -655,9 +721,25 @@ def main():
                 daemon=True
             ).start()
 
+        elif cmd == "die":
+            if not player_info[0]:
+                print("Player fish not yet captured.")
+            else:
+                try:
+                    result = trigger_death(
+                        pm,
+                        player_info[0]["player_fish"],
+                        player_info[0]["sub_object"]
+                    )
+                    print(f"Death triggered: {result}")
+                except Exception as e:
+                    print(f"Failed: {e}")
+
         else:
             print(f"Unknown command: {cmd}")
             print_help()
+
+        
 
     stop_event.set()
     watcher_thread.join(timeout=1)
