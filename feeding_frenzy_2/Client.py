@@ -541,6 +541,7 @@ class FF2Context(CommonContext):
 
     def _send_death_link(self):
         if self._death_link_enabled:
+            logger.info(f"[FF2] DeathLink sent (lives: {self._last_lives} -> {self._last_lives - 1})")
             Utils.async_start(self.send_msgs([{
                 "cmd": "Bounce",
                 "tags": ["DeathLink"],
@@ -720,7 +721,6 @@ async def game_watcher(ctx: FF2Context):
                     ctx._death_link_written_lives = None  # this decrement was ours, ignore
                 else:
                     ctx._send_death_link()
-                    logger.info(f"[FF2] DeathLink sent (lives: {ctx._last_lives} → {current_lives})")
             ctx._last_lives = current_lives
             ctx._last_lives = current_lives
 
@@ -731,7 +731,7 @@ async def game_watcher(ctx: FF2Context):
                     allowed = max_allowed_stage(ctx.fish_received)
                     if current_max > allowed:
                         write_int(pm, ctx.max_stage_addr, allowed)
-                        logger.info(f"[FF2] MaxStage clamped {current_max} → {allowed}")
+                        logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
                         reset_to_boundary_level(pm, ctx.level_obj)
                         ctx._last_max_stage = allowed
                     else:
