@@ -8,9 +8,11 @@ import threading
 PROCESS_NAME = "popcapgame1.exe"
 
 # breakpoint offsets
-LEVEL_STATE_OFFSET   = 0x9C064
-MAX_STAGE_OFFSET     = 0x9AED3
-PLAYER_FISH_OFFSET   = 0x38D47
+LEVEL_STATE_OFFSET        = 0x9C064
+MAX_STAGE_OFFSET          = 0x9AED3
+PLAYER_FISH_OFFSET        = 0x38D47
+COMPLETION_CLEAR_OFFSET   = 0xF1F19   # mov byte ptr [edi+0x391],01  (stageClear)
+COMPLETION_PERFECT_OFFSET = 0xF218F   # mov byte ptr [ebx+0x391],01  (stagePerfect)
 
 # confirmed offsets from captured eax value (level object)
 OFFSET_LIVES          = 0x10
@@ -31,6 +33,7 @@ OFFSET_DASH_FLAG  = 0xD2
 
 # zone boundaries (0-indexed level where each new zone starts)
 ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 49, 52, 55, 58, 61]
+BONUS_LEVELS    = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
 
 DBG_CONTINUE      = 0x00010002
 TH32CS_SNAPTHREAD = 0x00000004
@@ -410,7 +413,7 @@ def reset_to_boundary_level(pm, level_obj):
     write_int(pm, level_obj + OFFSET_PROGRESS, 0)
     print(f"\n  [watcher] Boundary reached — resetting to level {current_level} replay")
 
-def level_watcher(pm, level_obj, max_stage_addr, fish_received, player_info, stop_event):
+def level_watcher(pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event):
     completed_levels = set()
     completed_stages = set()
     last_level_id    = None
@@ -457,6 +460,14 @@ def level_watcher(pm, level_obj, max_stage_addr, fish_received, player_info, sto
                         completed_levels.add(completed_id)
                         print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (new!)")
                     print("> ", end="", flush=True)
+                    # clear stale pointer, re-capture for new level
+                    player_info[0] = None
+                    print(f"  [watcher] Re-capturing player fish for level {current_level + 1}...")
+                    print("> ", end="", flush=True)
+                    threading.Thread(
+                        target=lambda: _recapture_player_fish(pm, base, player_info, stop_event),
+                        daemon=True,
+                    ).start()
 
                 last_level_id = current_level
                 last_stage    = current_stage
@@ -484,6 +495,13 @@ def level_watcher(pm, level_obj, max_stage_addr, fish_received, player_info, sto
         except Exception:
             pass
         stop_event.wait(0.1)
+
+def _recapture_player_fish(pm, base, player_info, stop_event):
+    result = capture_player_fish(pm, base, stop_event)
+    if result:
+        player_info[0] = result
+        print(f"\n  [watcher] Re-captured player fish: 0x{result['player_fish']:08X}")
+        print("> ", end="", flush=True)
 
 def trigger_death(pm, player_fish, sub_object):
     """Call the player death function then trigger respawn loop."""
@@ -560,7 +578,7 @@ def print_help():
     print("  dump player [count] - hex dump player sub-object region")
     print("  item <name> [delay] - grant an item (optionally after delay seconds)")
     print("    items: life, fish")
-    print("  die                 - trigger player death")
+    print("  die [delay]         - trigger player death (optionally after delay seconds)")
     print("  quit                - exit")
 
 def main():
@@ -598,7 +616,7 @@ def main():
 
     watcher_thread = threading.Thread(
         target=level_watcher,
-        args=(pm, level_obj, max_stage_addr, fish_received, player_info, stop_event),
+        args=(pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event),
         daemon=True
     )
     watcher_thread.start()
@@ -722,18 +740,33 @@ def main():
             ).start()
 
         elif cmd == "die":
-            if not player_info[0]:
-                print("Player fish not yet captured.")
-            else:
+            delay = int(parts[1]) if len(parts) > 1 else 0
+
+            def do_die(delay=delay):
+                if delay:
+                    print(f"  [die] Death in {delay}s...")
+                    print("> ", end="", flush=True)
+                    stop_event.wait(delay)
+                if not player_info[0]:
+                    print("\n  [die] No player fish — dropping.")
+                    print("> ", end="", flush=True); return
+                info = player_info[0]
                 try:
-                    result = trigger_death(
-                        pm,
-                        player_info[0]["player_fish"],
-                        player_info[0]["sub_object"]
-                    )
-                    print(f"Death triggered: {result}")
+                    level_id  = read_int(pm, level_obj + OFFSET_LEVEL_ID)
+                    alive_ptr = read_int(pm, info["sub_object"] + OFFSET_ALIVE_PTR)
+                    if (level_id + 1) in BONUS_LEVELS:
+                        print(f"\n  [die] Bonus level {level_id + 1} — dropping.")
+                        print("> ", end="", flush=True); return
+                    if alive_ptr == 0:
+                        print("\n  [die] alive_ptr=0 (respawning) — dropping.")
+                        print("> ", end="", flush=True); return
+                    result = trigger_death(pm, info["player_fish"], info["sub_object"])
+                    print(f"\n  [die] trigger_death: {result}")
                 except Exception as e:
-                    print(f"Failed: {e}")
+                    print(f"\n  [die] Failed: {e}")
+                print("> ", end="", flush=True)
+
+            threading.Thread(target=do_die, daemon=True).start()
 
         else:
             print(f"Unknown command: {cmd}")

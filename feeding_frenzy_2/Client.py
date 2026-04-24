@@ -35,6 +35,7 @@ OFFSET_PROGRESS       = 0x40
 # ── Player fish struct offsets ────────────────────────────────────────────────
 PLAYER_FISH_OFFSET    = 0x38D47
 OFFSET_SUB_OBJECT     = 0x8C
+OFFSET_ALIVE_PTR      = 0x78
 OFFSET_RESPAWN_FLAG   = 0x98
 DEATH_FUNC            = 0x00404E10
 
@@ -491,14 +492,7 @@ class FF2Context(CommonContext):
                 source = args.get("data", {}).get("source", "")
                 if source == self.player_names.get(self.slot, ""):
                     return
-                if self.game_ready and self.player_fish and self.sub_object:
-                    try:
-                        current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
-                        self._death_link_written_lives = max(0, current - 1)
-                        trigger_death(self.pm, self.player_fish, self.sub_object)
-                        logger.info(f"[FF2] DeathLink received — triggering death")
-                    except Exception as e:
-                        logger.error(f"[FF2] DeathLink apply failed: {e}")
+                self._receive_death_link()
 
 
     def _apply_fish_item(self):
@@ -551,6 +545,42 @@ class FF2Context(CommonContext):
                     "source": self.player_names.get(self.slot, "FF2 Player"),
                 },
             }]))
+
+    def _receive_death_link(self) -> None:
+        if not self.game_ready:
+            logger.info("[FF2] DeathLink — game not ready, dropping"); return
+
+        player_fish = self.player_fish
+        sub_object  = self.sub_object
+
+        if player_fish is None or sub_object is None:
+            logger.info("[FF2] DeathLink — no valid fish pointer, dropping"); return
+
+        if not self.level_obj:
+            logger.info("[FF2] DeathLink — no level object, dropping"); return
+
+        try:
+            level_id = read_int(self.pm, self.level_obj + OFFSET_LEVEL_ID)
+            if (level_id + 1) in BONUS_LEVELS:
+                logger.info(f"[FF2] DeathLink — bonus level {level_id + 1}, dropping"); return
+        except Exception:
+            return
+
+        try:
+            alive_ptr = read_int(self.pm, sub_object + OFFSET_ALIVE_PTR)
+        except Exception as e:
+            logger.error(f"[FF2] DeathLink — alive_ptr read failed: {e}"); return
+
+        if alive_ptr == 0:
+            logger.info("[FF2] DeathLink — player not spawned, dropping"); return
+
+        try:
+            current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
+            self._death_link_written_lives = max(0, current - 1)
+            trigger_death(self.pm, player_fish, sub_object)
+            logger.info("[FF2] DeathLink — death triggered")
+        except Exception as e:
+            logger.error(f"[FF2] DeathLink apply failed: {e}")
 
 # ── Deathlink routine ───────────────────────────────────────────────────────────────
 def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
@@ -707,10 +737,15 @@ async def game_watcher(ctx: FF2Context):
                         ctx._send_location(loc_id)
                         logger.info(f"[FF2] Check: Level {level_1 + 1} Complete")
 
-                        # goal: completing level 60 (id 59)
                         if completed_id == 59:
                             ctx._send_goal()
                             logger.info("[FF2] Goal reached — Final Boss defeated!")
+
+                    # clear stale pointers — new level's fish not captured yet
+                    ctx.player_fish = None
+                    ctx.sub_object  = None
+                    logger.info("[FF2] Player pointers cleared — re-capturing for new level")
+                    Utils.async_start(_capture_player_fish())
 
                 ctx._last_level_id = current_level
                 ctx._last_stage    = current_stage
@@ -721,7 +756,6 @@ async def game_watcher(ctx: FF2Context):
                     ctx._death_link_written_lives = None  # this decrement was ours, ignore
                 else:
                     ctx._send_death_link()
-            ctx._last_lives = current_lives
             ctx._last_lives = current_lives
 
             # ── clamp mode0MaxStage ───────────────────────────────────────
