@@ -1,4 +1,4 @@
-# Release v0.4
+# Feeding Frenzy 2 AP - Release v0.4
 Fixed some bugs relating to logic and stability
 
 ## Bug fixes:
