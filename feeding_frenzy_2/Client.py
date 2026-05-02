@@ -42,6 +42,10 @@ DEATH_FUNC            = 0x00404E10
 # ── Max stage offset from ecx ─────────────────────────────────────────────────
 OFFSET_MAX_STAGE = 0x58
 
+# ── Boss health counter ───────────────────────────────────────────────────────
+BOSS_HP_OFFSET  = 0xA908A   # inc [ecx+0xB4]  — fires each time boss takes a hit
+OFFSET_BOSS_HP  = 0xB4      # goal at 20 hits
+
 # ── Zone boundaries (0-indexed level where each new zone starts) ──────────────
 ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 46, 49, 52, 55, 58, 61]
 
@@ -456,6 +460,10 @@ class FF2Context(CommonContext):
         self._death_link_enabled:           bool          = False
         self._death_link_written_lives:     Optional[int] = False
 
+        # boss state
+        self.boss_hp_addr:       Optional[int] = None
+        self._boss_hp_capturing: bool          = False
+
         # fishy state
         self.player_fish:    Optional[int] = None
         self.sub_object:     Optional[int] = None
@@ -658,15 +666,17 @@ async def game_watcher(ctx: FF2Context):
         # reset game-session state (Archipelago state — fish_received, completed_*, etc. — preserved)
         ctx._stop_event.set()
         ctx._stop_event     = threading.Event()
-        ctx.level_obj       = None
-        ctx.max_stage_addr  = None
-        ctx.player_fish     = None
-        ctx.sub_object      = None
-        ctx.game_ready      = False
-        ctx._last_level_id  = None
-        ctx._last_stage     = None
-        ctx._last_max_stage = None
-        ctx._last_lives     = None
+        ctx.level_obj        = None
+        ctx.max_stage_addr   = None
+        ctx.player_fish      = None
+        ctx.sub_object       = None
+        ctx.game_ready       = False
+        ctx.boss_hp_addr     = None
+        ctx._boss_hp_capturing = False
+        ctx._last_level_id   = None
+        ctx._last_stage      = None
+        ctx._last_max_stage  = None
+        ctx._last_lives      = None
         ctx._stable_level_id = None
         ctx._stable_count    = 0
 
@@ -705,8 +715,26 @@ async def game_watcher(ctx: FF2Context):
                 ctx.player_fish = result["player_fish"]
                 ctx.sub_object  = result["sub_object"]
                 logger.info(f"[FF2] Player fish: 0x{ctx.player_fish:08X} sub: 0x{ctx.sub_object:08X}")
+            if ctx.level_obj:
+                try:
+                    if read_int(pm, ctx.level_obj + OFFSET_LEVEL_ID) == 59 and not ctx._boss_hp_capturing:
+                        ctx.boss_hp_addr       = None
+                        ctx._boss_hp_capturing = True
+                        Utils.async_start(_capture_boss_hp())
+                except Exception:
+                    pass
 
         Utils.async_start(_capture_player_fish())
+
+        async def _capture_boss_hp():
+            target = base + BOSS_HP_OFFSET
+            result = await loop.run_in_executor(
+                None, _do_capture_boss_hp, pm, target, ctx._stop_event
+            )
+            if result:
+                ctx.boss_hp_addr = result
+                logger.info(f"[FF2] Boss HP counter: 0x{result:08X}")
+            ctx._boss_hp_capturing = False
 
         # ── main poll loop ───────────────────────────────────────────────
         consecutive_errors = 0
@@ -751,10 +779,6 @@ async def game_watcher(ctx: FF2Context):
                             ctx._send_location(loc_id)
                             logger.info(f"[FF2] Check: Level {level_1 + 1} Complete")
 
-                            if completed_id == 59:
-                                ctx._send_goal()
-                                logger.info("[FF2] Goal reached — Final Boss defeated!")
-
                         ctx.player_fish = None
                         ctx.sub_object  = None
                         logger.info("[FF2] Player pointers cleared — re-capturing for new level")
@@ -762,6 +786,16 @@ async def game_watcher(ctx: FF2Context):
 
                     ctx._last_level_id = current_level
                     ctx._last_stage    = current_stage
+
+                # ── boss defeat check ─────────────────────────────────────
+                if ctx.boss_hp_addr is not None and current_level == 59:
+                    try:
+                        if read_int(pm, ctx.boss_hp_addr) >= 20:
+                            ctx._send_goal()
+                            logger.info("[FF2] Boss defeated (20 hits) — goal sent!")
+                            ctx.boss_hp_addr = None  # prevent re-triggering
+                    except Exception:
+                        pass
 
                 # ── DeathLink send ────────────────────────────────────────
                 if ctx._last_lives is not None and current_lives == ctx._last_lives - 1:
@@ -796,6 +830,49 @@ async def game_watcher(ctx: FF2Context):
             await asyncio.sleep(0.1)
 
     ctx._stop_event.set()
+
+def _do_capture_boss_hp(pm, target, stop_event):
+    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
+        return None
+    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+    for tid in get_process_threads(pm.process_id):
+        set_bp_on_thread(tid, target, 0)
+
+    result      = None
+    debug_event = DEBUG_EVENT()
+    while not stop_event.is_set() and result is None:
+        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
+            continue
+        event_code = debug_event.dwDebugEventCode
+        tid        = debug_event.dwThreadId
+        if event_code == 1:
+            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
+            if exc_addr == target and code not in (0x80000003,):
+                th = get_thread_handle(tid)
+                if th:
+                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
+                        try:
+                            ctx_ = CONTEXT()
+                            ctx_.ContextFlags = CONTEXT_CAPTURE
+                            if Wow64GetThreadContext(th, ctypes.byref(ctx_)) and ctx_.Eip == target:
+                                ecx = ctx_.Ecx
+                                if ecx:
+                                    result = ecx + OFFSET_BOSS_HP
+                                    clear_hardware_breakpoint(th, 0)
+                        finally:
+                            ctypes.windll.kernel32.ResumeThread(th)
+                    ctypes.windll.kernel32.CloseHandle(th)
+        elif event_code == 3:
+            set_bp_on_thread(tid, target, 0)
+        ctypes.windll.kernel32.ContinueDebugEvent(
+            debug_event.dwProcessId, tid, DBG_CONTINUE
+        )
+        if result is not None:
+            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
+            break
+    return result
+
 
 def _do_capture_player_fish(pm, target, stop_event):
     if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
