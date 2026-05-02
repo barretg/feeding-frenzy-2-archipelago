@@ -43,7 +43,7 @@ DEATH_FUNC            = 0x00404E10
 OFFSET_MAX_STAGE = 0x58
 
 # ── Zone boundaries (0-indexed level where each new zone starts) ──────────────
-ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 49, 52, 55, 58, 61]
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 46, 49, 52, 55, 58, 61]
 
 # ── Location IDs (must match world definition) ────────────────────────────────
 BONUS_LEVELS = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
@@ -475,6 +475,8 @@ class FF2Context(CommonContext):
             logger.info(f"[FF2] Connected. DeathLink: {self._death_link_enabled}")
 
         elif cmd == "ReceivedItems":
+            if args.get("index", 0) == 0:
+                self.fish_received = 0  # full resend — recount from scratch
             for item in args["items"]:
                 item_id = item.item
                 if item_id == ITEM_PROGRESSIVE_FISH:
@@ -634,147 +636,164 @@ def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
 # ── Game watcher loop ─────────────────────────────────────────────────────────
 
 async def game_watcher(ctx: FF2Context):
-    STABLE_THRESHOLD = 3
-
-    # wait for game process
-    while not ctx.exit_event.is_set():
-        try:
-            ctx.pm = pymem.Pymem(PROCESS_NAME)
-            logger.info(f"[FF2] Attached to {PROCESS_NAME}")
-            break
-        except Exception:
-            logger.info(f"[FF2] Waiting for {PROCESS_NAME}...")
-            await asyncio.sleep(3)
-
-    if ctx.exit_event.is_set():
-        return
-
-    pm   = ctx.pm
-    base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
-    logger.info(f"[FF2] Base address: 0x{base:08X}")
-
-    # capture level object in thread (blocks until player loads a level)
+    STABLE_THRESHOLD   = 3
+    CRASH_ERROR_THRESH = 5
     loop = asyncio.get_event_loop()
-    ctx.level_obj = await loop.run_in_executor(
-        None, capture_level_object, pm, base
-    )
-    if not ctx.level_obj:
-        logger.error("[FF2] Failed to capture level object.")
-        return
 
-    ctx.game_ready = True
-    logger.info("[FF2] Game ready. Watching for checks...")
-
-    # apply any fish items already received before game was ready
-    if ctx.fish_received > 0 and ctx.max_stage_addr:
-        ctx._apply_fish_item()
-
-    # start max stage capture in background
-    async def _capture_max_stage():
-        result = await loop.run_in_executor(
-            None, capture_max_stage_object, pm, base, ctx._stop_event
-        )
-        if result:
-            ctx.max_stage_addr = result
-            # apply any fish already received
-            if ctx.fish_received > 0:
-                ctx._apply_fish_item()
-
-    Utils.async_start(_capture_max_stage())
-
-    # capture player fish after level object is captured (guaranteed to be available at this point)
-    async def _capture_player_fish():
-        target = base + PLAYER_FISH_OFFSET
-        # reuse same debug capture pattern as max stage
-        result = await loop.run_in_executor(
-            None, _do_capture_player_fish, pm, target, ctx._stop_event
-        )
-        if result:
-            ctx.player_fish = result["player_fish"]
-            ctx.sub_object  = result["sub_object"]
-            logger.info(f"[FF2] Player fish: 0x{ctx.player_fish:08X} sub: 0x{ctx.sub_object:08X}")
-
-    Utils.async_start(_capture_player_fish())
-
-    # main poll loop
     while not ctx.exit_event.is_set():
-        try:
-            current_level = read_int(pm, ctx.level_obj + OFFSET_LEVEL_ID)
-            current_stage = read_int(pm, ctx.level_obj + OFFSET_STAGE)
-            current_lives = read_int(pm, ctx.level_obj + OFFSET_LIVES)
 
-            # ── debounce level_id ─────────────────────────────────────────
-            if current_level == ctx._stable_level_id:
-                ctx._stable_count += 1
-            else:
-                ctx._stable_level_id = current_level
-                ctx._stable_count    = 1
+        # ── wait for / attach to game process ────────────────────────────
+        while not ctx.exit_event.is_set():
+            try:
+                ctx.pm = pymem.Pymem(PROCESS_NAME)
+                logger.info(f"[FF2] Attached to {PROCESS_NAME}")
+                break
+            except Exception:
+                logger.info(f"[FF2] Waiting for {PROCESS_NAME}...")
+                await asyncio.sleep(3)
 
-            if ctx._stable_count >= STABLE_THRESHOLD:
-                current_level = ctx._stable_level_id
+        if ctx.exit_event.is_set():
+            break
 
-                # ── stage checks (stages 1 and 2 only) ───────────────────
-                if ctx._last_stage is not None and current_stage != ctx._last_stage:
-                    if current_stage in (1, 2):
-                        check_key = (current_level, current_stage)
-                        if check_key not in ctx._completed_stages:
-                            ctx._completed_stages.add(check_key)
-                            level_1   = current_level  # 0-indexed
-                            is_bonus  = (level_1 + 1) in BONUS_LEVELS
-                            if not is_bonus:
-                                slot     = current_stage - 1  # stage 1 → slot 0, stage 2 → slot 1
-                                loc_id   = location_id_for(level_1, slot)
-                                ctx._send_location(loc_id)
-                                logger.info(f"[FF2] Check: Level {level_1 + 1} Stage {current_stage}")
+        # reset game-session state (Archipelago state — fish_received, completed_*, etc. — preserved)
+        ctx._stop_event.set()
+        ctx._stop_event     = threading.Event()
+        ctx.level_obj       = None
+        ctx.max_stage_addr  = None
+        ctx.player_fish     = None
+        ctx.sub_object      = None
+        ctx.game_ready      = False
+        ctx._last_level_id  = None
+        ctx._last_stage     = None
+        ctx._last_max_stage = None
+        ctx._last_lives     = None
+        ctx._stable_level_id = None
+        ctx._stable_count    = 0
 
-                # ── level completion ──────────────────────────────────────
-                if ctx._last_level_id is not None and current_level == ctx._last_level_id + 1:
-                    completed_id = ctx._last_level_id
-                    if completed_id not in ctx._completed_levels:
-                        ctx._completed_levels.add(completed_id)
-                        level_1  = completed_id
-                        loc_id   = location_id_for(level_1, 2)
-                        ctx._send_location(loc_id)
-                        logger.info(f"[FF2] Check: Level {level_1 + 1} Complete")
+        pm   = ctx.pm
+        base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
+        logger.info(f"[FF2] Base address: 0x{base:08X}")
 
-                        if completed_id == 59:
-                            ctx._send_goal()
-                            logger.info("[FF2] Goal reached — Final Boss defeated!")
+        ctx.level_obj = await loop.run_in_executor(None, capture_level_object, pm, base)
+        if not ctx.level_obj:
+            logger.error("[FF2] Failed to capture level object.")
+            continue
 
-                    # clear stale pointers — new level's fish not captured yet
-                    ctx.player_fish = None
-                    ctx.sub_object  = None
-                    logger.info("[FF2] Player pointers cleared — re-capturing for new level")
-                    Utils.async_start(_capture_player_fish())
+        ctx.game_ready = True
+        logger.info("[FF2] Game ready. Watching for checks...")
 
-                ctx._last_level_id = current_level
-                ctx._last_stage    = current_stage
+        if ctx.fish_received > 0 and ctx.max_stage_addr:
+            ctx._apply_fish_item()
 
-            # ── DeathLink send ────────────────────────────────────────────
-            if ctx._last_lives is not None and current_lives == ctx._last_lives - 1:
-                if ctx._death_link_written_lives == current_lives:
-                    ctx._death_link_written_lives = None  # this decrement was ours, ignore
+        async def _capture_max_stage():
+            result = await loop.run_in_executor(
+                None, capture_max_stage_object, pm, base, ctx._stop_event
+            )
+            if result:
+                ctx.max_stage_addr = result
+                if ctx.fish_received > 0:
+                    ctx._apply_fish_item()
+
+        Utils.async_start(_capture_max_stage())
+
+        async def _capture_player_fish():
+            target = base + PLAYER_FISH_OFFSET
+            result = await loop.run_in_executor(
+                None, _do_capture_player_fish, pm, target, ctx._stop_event
+            )
+            if result:
+                ctx.player_fish = result["player_fish"]
+                ctx.sub_object  = result["sub_object"]
+                logger.info(f"[FF2] Player fish: 0x{ctx.player_fish:08X} sub: 0x{ctx.sub_object:08X}")
+
+        Utils.async_start(_capture_player_fish())
+
+        # ── main poll loop ───────────────────────────────────────────────
+        consecutive_errors = 0
+        while not ctx.exit_event.is_set():
+            try:
+                current_level = read_int(pm, ctx.level_obj + OFFSET_LEVEL_ID)
+                current_stage = read_int(pm, ctx.level_obj + OFFSET_STAGE)
+                current_lives = read_int(pm, ctx.level_obj + OFFSET_LIVES)
+                consecutive_errors = 0
+
+                # ── debounce level_id ─────────────────────────────────────
+                if current_level == ctx._stable_level_id:
+                    ctx._stable_count += 1
                 else:
-                    ctx._send_death_link()
-            ctx._last_lives = current_lives
+                    ctx._stable_level_id = current_level
+                    ctx._stable_count    = 1
 
-            # ── clamp mode0MaxStage ───────────────────────────────────────
-            if ctx.max_stage_addr is not None:
-                current_max = read_int(pm, ctx.max_stage_addr)
-                if current_max != ctx._last_max_stage:
-                    allowed = max_allowed_stage(ctx.fish_received)
-                    if current_max > allowed:
-                        write_int(pm, ctx.max_stage_addr, allowed)
-                        logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
-                        reset_to_boundary_level(pm, ctx.level_obj)
-                        ctx._last_max_stage = allowed
+                if ctx._stable_count >= STABLE_THRESHOLD:
+                    current_level = ctx._stable_level_id
+
+                    # ── stage checks (stages 1 and 2 only) ───────────────
+                    if ctx._last_stage is not None and current_stage != ctx._last_stage:
+                        if current_stage in (1, 2):
+                            check_key = (current_level, current_stage)
+                            if check_key not in ctx._completed_stages:
+                                ctx._completed_stages.add(check_key)
+                                level_1  = current_level
+                                is_bonus = (level_1 + 1) in BONUS_LEVELS
+                                if not is_bonus:
+                                    slot   = current_stage - 1
+                                    loc_id = location_id_for(level_1, slot)
+                                    ctx._send_location(loc_id)
+                                    logger.info(f"[FF2] Check: Level {level_1 + 1} Stage {current_stage}")
+
+                    # ── level completion ──────────────────────────────────
+                    if ctx._last_level_id is not None and current_level == ctx._last_level_id + 1:
+                        completed_id = ctx._last_level_id
+                        if completed_id not in ctx._completed_levels:
+                            ctx._completed_levels.add(completed_id)
+                            level_1  = completed_id
+                            loc_id   = location_id_for(level_1, 2)
+                            ctx._send_location(loc_id)
+                            logger.info(f"[FF2] Check: Level {level_1 + 1} Complete")
+
+                            if completed_id == 59:
+                                ctx._send_goal()
+                                logger.info("[FF2] Goal reached — Final Boss defeated!")
+
+                        ctx.player_fish = None
+                        ctx.sub_object  = None
+                        logger.info("[FF2] Player pointers cleared — re-capturing for new level")
+                        Utils.async_start(_capture_player_fish())
+
+                    ctx._last_level_id = current_level
+                    ctx._last_stage    = current_stage
+
+                # ── DeathLink send ────────────────────────────────────────
+                if ctx._last_lives is not None and current_lives == ctx._last_lives - 1:
+                    if ctx._death_link_written_lives == current_lives:
+                        ctx._death_link_written_lives = None
                     else:
-                        ctx._last_max_stage = current_max
+                        ctx._send_death_link()
+                ctx._last_lives = current_lives
 
-        except Exception as e:
-            logger.debug(f"[FF2] Watcher error: {e}")
+                # ── clamp mode0MaxStage ───────────────────────────────────
+                if ctx.max_stage_addr is not None:
+                    current_max = read_int(pm, ctx.max_stage_addr)
+                    if current_max != ctx._last_max_stage:
+                        allowed = max_allowed_stage(ctx.fish_received)
+                        if current_max > allowed:
+                            write_int(pm, ctx.max_stage_addr, allowed)
+                            logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
+                            reset_to_boundary_level(pm, ctx.level_obj)
+                            ctx._last_max_stage = allowed
+                        else:
+                            ctx._last_max_stage = current_max
 
-        await asyncio.sleep(0.1)
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= CRASH_ERROR_THRESH:
+                    logger.warning("[FF2] Game process lost — resetting and waiting to re-attach")
+                    ctx._stop_event.set()
+                    ctx.game_ready = False
+                    break
+                logger.debug(f"[FF2] Watcher error: {e}")
+
+            await asyncio.sleep(0.1)
 
     ctx._stop_event.set()
 

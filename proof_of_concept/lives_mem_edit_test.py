@@ -32,7 +32,7 @@ OFFSET_ALIVE_PTR  = 0x78
 OFFSET_DASH_FLAG  = 0xD2
 
 # zone boundaries (0-indexed level where each new zone starts)
-ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 49, 52, 55, 58, 61]
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 46, 49, 52, 55, 58, 61]
 BONUS_LEVELS    = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
 
 DBG_CONTINUE      = 0x00010002
