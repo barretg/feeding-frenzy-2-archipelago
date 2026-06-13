@@ -10,11 +10,12 @@ from .Locations import (FF2Location, LOCATION_TABLE, ZONE_BOUNDARIES,
 from .Options import FF2Options
 
 GAME_NAME              = "Feeding Frenzy 2"
-PROGRESSIVE_FISH_COUNT = 11
+PROGRESSIVE_FISH_COUNT = 10
 EXTRA_FISH             = 2
 TOTAL_FISH_ITEMS       = PROGRESSIVE_FISH_COUNT + EXTRA_FISH
+DASH_COUNT             = 1
 TOTAL_LOCATIONS        = len(LOCATION_TABLE)
-TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS
+TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT
 
 
 # ── Launcher registration ─────────────────────────────────────────────────────
@@ -72,6 +73,8 @@ class FF2World(World):
     def create_items(self) -> None:
         for _ in range(TOTAL_FISH_ITEMS):
             self.multiworld.itempool.append(self.create_item("Progressive Fish"))
+        for _ in range(DASH_COUNT):
+            self.multiworld.itempool.append(self.create_item("Dash"))
         for _ in range(TOTAL_1UP_ITEMS):
             self.multiworld.itempool.append(self.create_item("1-Up"))
 
@@ -100,7 +103,7 @@ class FF2World(World):
                     state.has("Progressive Fish", self.player, n)
             )
 
-        # Final zone → Goal (requires all 11 fish)
+        # Final zone → Goal (requires all 10 fish)
         zone_regions[-1].connect(
             goal_region,
             rule=lambda state:

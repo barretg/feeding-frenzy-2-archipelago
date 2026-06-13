@@ -20,7 +20,7 @@ TOTAL_LEVELS = 60
 
 # Zone boundaries: 0-indexed level ID where each new zone starts.
 # Zone N requires N Progressive Fish items to access.
-ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 49, 52, 55, 58, 61]
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 45, 48, 51, 54, 57]
 
 # Location ID base
 LOC_BASE = 0xFF20000 + 0x1000

@@ -47,7 +47,7 @@ BOSS_HP_OFFSET  = 0xA908A   # inc [ecx+0xB4]  — fires each time boss takes a h
 OFFSET_BOSS_HP  = 0xB4      # goal at 20 hits
 
 # ── Zone boundaries (0-indexed level where each new zone starts) ──────────────
-ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 46, 49, 52, 55, 58, 61]
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 45, 48, 51, 54, 57]
 
 # ── Location IDs (must match world definition) ────────────────────────────────
 BONUS_LEVELS = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
@@ -56,6 +56,14 @@ LOC_BASE     = 0xFF20000 + 0x1000
 
 ITEM_PROGRESSIVE_FISH = 0xFF20000 + 1
 ITEM_1UP              = 0xFF20000 + 2
+ITEM_DASH             = 0xFF20000 + 3
+
+# ── Dash ability patch ────────────────────────────────────────────────────────
+# Patch the call site at 0x004248AD (WM_LBUTTONDOWN handler) to NOP.
+# This is the actual dash trigger (call 0x4204A0); 0x0042490B was cursor snap only.
+DASH_CALL_OFFSET = 0x248AD
+DASH_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
+DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])        # call 0x4204A0
 
 # ── Windows debug API setup ───────────────────────────────────────────────────
 DBG_CONTINUE      = 0x00010002
@@ -178,6 +186,38 @@ class CONTEXT(ctypes.Structure):
 
 def read_int(pm: pymem.Pymem, address: int) -> int:
     return int.from_bytes(pm.read_bytes(address, 4), byteorder="little")
+
+
+_GWL_STYLE        = -16
+_WS_THICKFRAME    = 0x00040000
+_WS_MAXIMIZEBOX   = 0x00010000
+_SWP_NOMOVE       = 0x0002
+_SWP_NOSIZE       = 0x0001
+_SWP_NOZORDER     = 0x0004
+_SWP_FRAMECHANGED = 0x0020
+
+def make_window_resizable() -> None:
+    hwnd = ctypes.windll.user32.FindWindowA(b"Gatsu", None)
+    if not hwnd:
+        logger.warning("[FF2] Could not find game window to make resizable")
+        return
+    style = ctypes.windll.user32.GetWindowLongA(hwnd, _GWL_STYLE)
+    style |= _WS_THICKFRAME | _WS_MAXIMIZEBOX
+    ctypes.windll.user32.SetWindowLongA(hwnd, _GWL_STYLE, style)
+    ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED)
+    logger.info(f"[FF2] Window resizable (hwnd=0x{hwnd:08X})")
+
+
+def write_bytes(pm: pymem.Pymem, address: int, data: bytes) -> None:
+    buf     = (ctypes.c_byte * len(data))(*data)
+    written = ctypes.c_size_t(0)
+    ctypes.windll.kernel32.WriteProcessMemory(
+        pm.process_handle,
+        ctypes.c_void_p(address),
+        buf, len(data),
+        ctypes.byref(written),
+    )
 
 
 def write_int(pm: pymem.Pymem, address: int, value: int) -> None:
@@ -468,6 +508,10 @@ class FF2Context(CommonContext):
         self.player_fish:    Optional[int] = None
         self.sub_object:     Optional[int] = None
 
+        # dash state
+        self.base:           Optional[int] = None
+        self.dash_received:  bool          = False
+
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
             await super().server_auth(password_requested)
@@ -483,8 +527,12 @@ class FF2Context(CommonContext):
             logger.info(f"[FF2] Connected. DeathLink: {self._death_link_enabled}")
 
         elif cmd == "ReceivedItems":
-            if args.get("index", 0) == 0:
+            is_full_resend = args.get("index", 0) == 0
+            if is_full_resend:
                 self.fish_received = 0  # full resend — recount from scratch
+                self.dash_received = False
+                if self.game_ready and self.base:
+                    self._block_dash()
             for item in args["items"]:
                 item_id = item.item
                 if item_id == ITEM_PROGRESSIVE_FISH:
@@ -494,8 +542,13 @@ class FF2Context(CommonContext):
                         self._apply_fish_item()
                 elif item_id == ITEM_1UP:
                     logger.info("[FF2] Received 1-Up")
-                    if self.game_ready and self.level_obj:
+                    if not is_full_resend and self.game_ready and self.level_obj:
                         self._apply_1up()
+                elif item_id == ITEM_DASH:
+                    self.dash_received = True
+                    logger.info("[FF2] Received Dash")
+                    if self.game_ready and self.base:
+                        self._unblock_dash()
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
@@ -504,6 +557,20 @@ class FF2Context(CommonContext):
                     return
                 self._receive_death_link()
 
+
+    def _block_dash(self):
+        try:
+            write_bytes(self.pm, self.base + DASH_CALL_OFFSET, DASH_BLOCKED)
+            logger.info("[FF2] Dash blocked")
+        except Exception as e:
+            logger.error(f"[FF2] Failed to block dash: {e}")
+
+    def _unblock_dash(self):
+        try:
+            write_bytes(self.pm, self.base + DASH_CALL_OFFSET, DASH_UNBLOCKED)
+            logger.info("[FF2] Dash unblocked")
+        except Exception as e:
+            logger.error(f"[FF2] Failed to unblock dash: {e}")
 
     def _apply_fish_item(self):
         try:
@@ -689,8 +756,14 @@ async def game_watcher(ctx: FF2Context):
             logger.error("[FF2] Failed to capture level object.")
             continue
 
+        ctx.base      = base
         ctx.game_ready = True
         logger.info("[FF2] Game ready. Watching for checks...")
+        make_window_resizable()
+
+        ctx._block_dash()
+        if ctx.dash_received:
+            ctx._unblock_dash()
 
         if ctx.fish_received > 0 and ctx.max_stage_addr:
             ctx._apply_fish_item()
@@ -808,15 +881,12 @@ async def game_watcher(ctx: FF2Context):
                 # ── clamp mode0MaxStage ───────────────────────────────────
                 if ctx.max_stage_addr is not None:
                     current_max = read_int(pm, ctx.max_stage_addr)
-                    if current_max != ctx._last_max_stage:
-                        allowed = max_allowed_stage(ctx.fish_received)
-                        if current_max > allowed:
-                            write_int(pm, ctx.max_stage_addr, allowed)
-                            logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
-                            reset_to_boundary_level(pm, ctx.level_obj)
-                            ctx._last_max_stage = allowed
-                        else:
-                            ctx._last_max_stage = current_max
+                    allowed = max_allowed_stage(ctx.fish_received)
+                    if current_max > allowed:
+                        write_int(pm, ctx.max_stage_addr, allowed)
+                        logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
+                        reset_to_boundary_level(pm, ctx.level_obj)
+                    ctx._last_max_stage = current_max
 
             except Exception as e:
                 consecutive_errors += 1

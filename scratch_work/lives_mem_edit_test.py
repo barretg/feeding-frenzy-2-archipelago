@@ -32,7 +32,21 @@ OFFSET_ALIVE_PTR  = 0x78
 OFFSET_DASH_FLAG  = 0xD2
 
 # zone boundaries (0-indexed level where each new zone starts)
-ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 46, 49, 52, 55, 58, 61]
+ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 45, 48, 51, 54, 57]
+
+# dash ability patch — actual dash call site at 0x004248AD (WM_LBUTTONDOWN handler)
+# 0x0042490B was cursor snap only; real dash trigger is call 0x4204A0 at 0x004248AD
+DASH_CALL_OFFSET = 0x248AD
+DASH_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])   # NOP x5
+DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])   # call 0x4204A0
+
+# focus-pause patch — forces WM_ACTIVATE handler to always call with active=1
+# WndProc: 00424780, WM_ACTIVATE handler: 0042497C
+# at 0042497F: setne al (0F 95 C0) -> mov al,1 + nop (B0 01 90)
+# game always enters the "activated" path, never pauses on focus loss
+FOCUS_PAUSE_OFFSET   = 0x2497F
+FOCUS_PAUSE_ORIGINAL = bytes([0x0F, 0x95, 0xC0])
+FOCUS_PAUSE_NOP      = bytes([0xB0, 0x01, 0x90])
 BONUS_LEVELS    = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
 
 DBG_CONTINUE      = 0x00010002
@@ -359,6 +373,71 @@ def write_int(pm, address, value):
         ctypes.byref(written),
     )
 
+def write_bytes(pm, address, data):
+    buf     = (ctypes.c_byte * len(data))(*data)
+    written = ctypes.c_size_t(0)
+    ok = ctypes.windll.kernel32.WriteProcessMemory(
+        pm.process_handle,
+        ctypes.c_void_p(address),
+        buf, len(data),
+        ctypes.byref(written),
+    )
+    return ok and written.value == len(data)
+
+GWL_STYLE        = -16
+WS_THICKFRAME    = 0x00040000
+WS_MAXIMIZEBOX   = 0x00010000
+SWP_NOMOVE       = 0x0002
+SWP_NOSIZE       = 0x0001
+SWP_NOZORDER     = 0x0004
+SWP_FRAMECHANGED = 0x0020
+
+def make_window_resizable():
+    hwnd = ctypes.windll.user32.FindWindowA(b"Gatsu", None)
+    if not hwnd:
+        print("  [window] Game window not found (is it running?)")
+        return False
+    style = ctypes.windll.user32.GetWindowLongA(hwnd, GWL_STYLE)
+    style |= WS_THICKFRAME | WS_MAXIMIZEBOX
+    ctypes.windll.user32.SetWindowLongA(hwnd, GWL_STYLE, style)
+    ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+    ctypes.windll.user32.ClipCursor(None)
+    print(f"  [window] Resizable, cursor unclipped (hwnd=0x{hwnd:08X})")
+    return True
+
+def patch_dash_block(pm, base):
+    addr = base + DASH_CALL_OFFSET
+    if write_bytes(pm, addr, DASH_BLOCKED):
+        print(f"  [patch] Dash blocked at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to block dash at 0x{addr:08X}")
+    return False
+
+def patch_dash_unblock(pm, base):
+    addr = base + DASH_CALL_OFFSET
+    if write_bytes(pm, addr, DASH_UNBLOCKED):
+        print(f"  [patch] Dash unblocked at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to unblock dash at 0x{addr:08X}")
+    return False
+
+def patch_focus_pause(pm, base):
+    addr = base + FOCUS_PAUSE_OFFSET
+    if write_bytes(pm, addr, FOCUS_PAUSE_NOP):
+        print(f"  [patch] Focus-pause NOPed at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to NOP focus-pause at 0x{addr:08X}")
+    return False
+
+def unpatch_focus_pause(pm, base):
+    addr = base + FOCUS_PAUSE_OFFSET
+    if write_bytes(pm, addr, FOCUS_PAUSE_ORIGINAL):
+        print(f"  [patch] Focus-pause restored at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to restore focus-pause at 0x{addr:08X}")
+    return False
+
 def read_byte(pm, address):
     return pm.read_bytes(address, 1)[0]
 
@@ -579,6 +658,11 @@ def print_help():
     print("  item <name> [delay] - grant an item (optionally after delay seconds)")
     print("    items: life, fish")
     print("  die [delay]         - trigger player death (optionally after delay seconds)")
+    print("  resize              - make game window resizable (applied on startup)")
+    print("  nodash              - block dash (applied on startup)")
+    print("  dash                - unblock dash (simulate receiving Dash item)")
+    print("  nopause             - NOP focus-loss pause (applied on startup)")
+    print("  unpause             - restore focus-loss pause")
     print("  quit                - exit")
 
 def main():
@@ -593,6 +677,10 @@ def main():
         pm.process_handle, PROCESS_NAME
     ).lpBaseOfDll
     print(f"Base: 0x{base:08X}")
+
+    patch_focus_pause(pm, base)
+    patch_dash_block(pm, base)
+    make_window_resizable()
 
     level_obj = capture_level_object(pm, base)
 
@@ -767,6 +855,21 @@ def main():
                 print("> ", end="", flush=True)
 
             threading.Thread(target=do_die, daemon=True).start()
+
+        elif cmd == "resize":
+            make_window_resizable()
+
+        elif cmd == "nodash":
+            patch_dash_block(pm, base)
+
+        elif cmd == "dash":
+            patch_dash_unblock(pm, base)
+
+        elif cmd == "nopause":
+            patch_focus_pause(pm, base)
+
+        elif cmd == "unpause":
+            unpatch_focus_pause(pm, base)
 
         else:
             print(f"Unknown command: {cmd}")
