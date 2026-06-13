@@ -40,6 +40,11 @@ DASH_CALL_OFFSET = 0x248AD
 DASH_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])   # NOP x5
 DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])   # call 0x4204A0
 
+# suck ability patch — call site at 0x00424A31 (WM_RBUTTONDOWN handler)
+SUCK_CALL_OFFSET = 0x24A31
+SUCK_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])   # NOP x5
+SUCK_UNBLOCKED   = bytes([0xE8, 0xAA, 0x98, 0x06, 0x00])   # call 0x48E2E0
+
 # focus-pause patch — forces WM_ACTIVATE handler to always call with active=1
 # WndProc: 00424780, WM_ACTIVATE handler: 0042497C
 # at 0042497F: setne al (0F 95 C0) -> mov al,1 + nop (B0 01 90)
@@ -422,6 +427,22 @@ def patch_dash_unblock(pm, base):
     print(f"  [patch] Failed to unblock dash at 0x{addr:08X}")
     return False
 
+def patch_suck_block(pm, base):
+    addr = base + SUCK_CALL_OFFSET
+    if write_bytes(pm, addr, SUCK_BLOCKED):
+        print(f"  [patch] Suck blocked at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to block suck at 0x{addr:08X}")
+    return False
+
+def patch_suck_unblock(pm, base):
+    addr = base + SUCK_CALL_OFFSET
+    if write_bytes(pm, addr, SUCK_UNBLOCKED):
+        print(f"  [patch] Suck unblocked at 0x{addr:08X}")
+        return True
+    print(f"  [patch] Failed to unblock suck at 0x{addr:08X}")
+    return False
+
 def patch_focus_pause(pm, base):
     addr = base + FOCUS_PAUSE_OFFSET
     if write_bytes(pm, addr, FOCUS_PAUSE_NOP):
@@ -661,6 +682,8 @@ def print_help():
     print("  resize              - make game window resizable (applied on startup)")
     print("  nodash              - block dash (applied on startup)")
     print("  dash                - unblock dash (simulate receiving Dash item)")
+    print("  nosuck              - block suck (applied on startup)")
+    print("  suck                - unblock suck (simulate receiving Suck item)")
     print("  nopause             - NOP focus-loss pause (applied on startup)")
     print("  unpause             - restore focus-loss pause")
     print("  quit                - exit")
@@ -680,6 +703,7 @@ def main():
 
     patch_focus_pause(pm, base)
     patch_dash_block(pm, base)
+    patch_suck_block(pm, base)
     make_window_resizable()
 
     level_obj = capture_level_object(pm, base)
@@ -864,6 +888,12 @@ def main():
 
         elif cmd == "dash":
             patch_dash_unblock(pm, base)
+
+        elif cmd == "nosuck":
+            patch_suck_block(pm, base)
+
+        elif cmd == "suck":
+            patch_suck_unblock(pm, base)
 
         elif cmd == "nopause":
             patch_focus_pause(pm, base)

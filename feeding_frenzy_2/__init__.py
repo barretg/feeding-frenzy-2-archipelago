@@ -14,8 +14,9 @@ PROGRESSIVE_FISH_COUNT = 10
 EXTRA_FISH             = 2
 TOTAL_FISH_ITEMS       = PROGRESSIVE_FISH_COUNT + EXTRA_FISH
 DASH_COUNT             = 1
+SUCK_COUNT             = 1
 TOTAL_LOCATIONS        = len(LOCATION_TABLE)
-TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT
+TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT - SUCK_COUNT
 
 
 # ── Launcher registration ─────────────────────────────────────────────────────
@@ -75,6 +76,8 @@ class FF2World(World):
             self.multiworld.itempool.append(self.create_item("Progressive Fish"))
         for _ in range(DASH_COUNT):
             self.multiworld.itempool.append(self.create_item("Dash"))
+        for _ in range(SUCK_COUNT):
+            self.multiworld.itempool.append(self.create_item("Suck"))
         for _ in range(TOTAL_1UP_ITEMS):
             self.multiworld.itempool.append(self.create_item("1-Up"))
 

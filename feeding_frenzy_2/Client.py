@@ -57,6 +57,7 @@ LOC_BASE     = 0xFF20000 + 0x1000
 ITEM_PROGRESSIVE_FISH = 0xFF20000 + 1
 ITEM_1UP              = 0xFF20000 + 2
 ITEM_DASH             = 0xFF20000 + 3
+ITEM_SUCK             = 0xFF20000 + 4
 
 # ── Dash ability patch ────────────────────────────────────────────────────────
 # Patch the call site at 0x004248AD (WM_LBUTTONDOWN handler) to NOP.
@@ -64,6 +65,12 @@ ITEM_DASH             = 0xFF20000 + 3
 DASH_CALL_OFFSET = 0x248AD
 DASH_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
 DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])        # call 0x4204A0
+
+# ── Suck ability patch ────────────────────────────────────────────────────────
+# Patch the call site at 0x00424A31 (WM_RBUTTONDOWN handler) to NOP.
+SUCK_CALL_OFFSET = 0x24A31
+SUCK_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
+SUCK_UNBLOCKED   = bytes([0xE8, 0xAA, 0x98, 0x06, 0x00])        # call 0x48E2E0
 
 # ── Windows debug API setup ───────────────────────────────────────────────────
 DBG_CONTINUE      = 0x00010002
@@ -508,9 +515,10 @@ class FF2Context(CommonContext):
         self.player_fish:    Optional[int] = None
         self.sub_object:     Optional[int] = None
 
-        # dash state
+        # ability state
         self.base:           Optional[int] = None
         self.dash_received:  bool          = False
+        self.suck_received:  bool          = False
 
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
@@ -531,8 +539,10 @@ class FF2Context(CommonContext):
             if is_full_resend:
                 self.fish_received = 0  # full resend — recount from scratch
                 self.dash_received = False
+                self.suck_received = False
                 if self.game_ready and self.base:
                     self._block_dash()
+                    self._block_suck()
             for item in args["items"]:
                 item_id = item.item
                 if item_id == ITEM_PROGRESSIVE_FISH:
@@ -549,6 +559,11 @@ class FF2Context(CommonContext):
                     logger.info("[FF2] Received Dash")
                     if self.game_ready and self.base:
                         self._unblock_dash()
+                elif item_id == ITEM_SUCK:
+                    self.suck_received = True
+                    logger.info("[FF2] Received Suck")
+                    if self.game_ready and self.base:
+                        self._unblock_suck()
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
@@ -571,6 +586,20 @@ class FF2Context(CommonContext):
             logger.info("[FF2] Dash unblocked")
         except Exception as e:
             logger.error(f"[FF2] Failed to unblock dash: {e}")
+
+    def _block_suck(self):
+        try:
+            write_bytes(self.pm, self.base + SUCK_CALL_OFFSET, SUCK_BLOCKED)
+            logger.info("[FF2] Suck blocked")
+        except Exception as e:
+            logger.error(f"[FF2] Failed to block suck: {e}")
+
+    def _unblock_suck(self):
+        try:
+            write_bytes(self.pm, self.base + SUCK_CALL_OFFSET, SUCK_UNBLOCKED)
+            logger.info("[FF2] Suck unblocked")
+        except Exception as e:
+            logger.error(f"[FF2] Failed to unblock suck: {e}")
 
     def _apply_fish_item(self):
         try:
@@ -764,6 +793,9 @@ async def game_watcher(ctx: FF2Context):
         ctx._block_dash()
         if ctx.dash_received:
             ctx._unblock_dash()
+        ctx._block_suck()
+        if ctx.suck_received:
+            ctx._unblock_suck()
 
         if ctx.fish_received > 0 and ctx.max_stage_addr:
             ctx._apply_fish_item()

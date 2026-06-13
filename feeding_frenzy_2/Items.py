@@ -27,6 +27,10 @@ ITEM_TABLE: Dict[str, FF2ItemData] = {
         code=BASE_ID + 3,
         classification=ItemClassification.useful,
     ),
+    "Suck": FF2ItemData(
+        code=BASE_ID + 4,
+        classification=ItemClassification.useful,
+    ),
 }
 
 item_name_to_id: Dict[str, int] = {
@@ -39,4 +43,5 @@ item_descriptions: Dict[str, str] = {
     "Progressive Fish": "Unlocks access to the next fish zone, allowing you to progress further.",
     "1-Up":             "Grants one extra life.",
     "Dash":             "Enables the ability to dash by clicking.",
+    "Suck":             "Enables the ability to suck in nearby fish by right-clicking.",
 }
