@@ -8,6 +8,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import sys
 import threading
+import time
 from typing import Optional
 
 import pymem
@@ -236,6 +237,202 @@ def write_int(pm: pymem.Pymem, address: int, value: int) -> None:
         buf, 4,
         ctypes.byref(written),
     )
+
+
+# ── Proxy window (DWM thumbnail) ─────────────────────────────────────────────
+
+_PM_REMOVE               = 0x0001
+_DWM_TNP_RECTDESTINATION = 0x1
+_DWM_TNP_OPACITY         = 0x4
+_DWM_TNP_VISIBLE         = 0x8
+_DWM_TNP_SOURCECLIENTONLY= 0x10
+_WS_OVERLAPPEDWINDOW     = 0x00CF0000
+_WS_VISIBLE              = 0x10000000
+_CS_HREDRAW              = 0x0002
+_CS_VREDRAW              = 0x0001
+_WM_DESTROY              = 0x0002
+_WM_SIZE                 = 0x0005
+_WM_CLOSE                = 0x0010
+_WM_QUIT                 = 0x0012
+
+_PROXY_MOUSE_MSGS = frozenset([0x200,0x201,0x202,0x203,0x204,0x205,0x206,0x207,0x208])
+_PROXY_KEY_MSGS   = frozenset([0x100,0x101,0x102])
+
+class _DWM_THUMBNAIL_PROPERTIES(ctypes.Structure):
+    _fields_ = [
+        ("dwFlags",               ctypes.c_uint),
+        ("rcDestination",         wintypes.RECT),
+        ("rcSource",              wintypes.RECT),
+        ("opacity",               ctypes.c_ubyte),
+        ("fVisible",              wintypes.BOOL),
+        ("fSourceClientAreaOnly", wintypes.BOOL),
+    ]
+
+_WPARAM_T  = ctypes.c_ulonglong
+_LPARAM_T  = ctypes.c_longlong
+_LRESULT_T = ctypes.c_longlong
+
+_WNDPROCTYPE = ctypes.WINFUNCTYPE(
+    _LRESULT_T, wintypes.HWND, ctypes.c_uint, _WPARAM_T, _LPARAM_T
+)
+
+class _WNDCLASSEX(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",        ctypes.c_uint),
+        ("style",         ctypes.c_uint),
+        ("lpfnWndProc",   _WNDPROCTYPE),
+        ("cbClsExtra",    ctypes.c_int),
+        ("cbWndExtra",    ctypes.c_int),
+        ("hInstance",     wintypes.HANDLE),
+        ("hIcon",         wintypes.HANDLE),
+        ("hCursor",       wintypes.HANDLE),
+        ("hbrBackground", wintypes.HANDLE),
+        ("lpszMenuName",  ctypes.c_char_p),
+        ("lpszClassName", ctypes.c_char_p),
+        ("hIconSm",       wintypes.HANDLE),
+    ]
+
+_proxy_wndproc_ref = None  # keep WNDPROCTYPE alive — GC would silently break it
+
+
+def _run_proxy_window(game_hwnd: int, game_w: int, game_h: int,
+                      stop_event: threading.Event) -> None:
+    global _proxy_wndproc_ref
+    user32   = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    dwmapi   = ctypes.windll.dwmapi
+    gdi32    = ctypes.windll.gdi32
+
+    _msg_args = [wintypes.HWND, ctypes.c_uint, _WPARAM_T, _LPARAM_T]
+    user32.DefWindowProcA.argtypes = _msg_args
+    user32.DefWindowProcA.restype  = _LRESULT_T
+    user32.PostMessageA.argtypes   = _msg_args
+    user32.PostMessageA.restype    = wintypes.BOOL
+
+    hthumbnail = wintypes.HANDLE(0)
+
+    def _update_thumb(cw: int, ch: int) -> None:
+        if not hthumbnail:
+            return
+        props = _DWM_THUMBNAIL_PROPERTIES()
+        props.dwFlags = (_DWM_TNP_RECTDESTINATION | _DWM_TNP_OPACITY |
+                         _DWM_TNP_VISIBLE | _DWM_TNP_SOURCECLIENTONLY)
+        props.rcDestination = wintypes.RECT(0, 0, cw, ch)
+        props.opacity = 255
+        props.fVisible = True
+        props.fSourceClientAreaOnly = True
+        dwmapi.DwmUpdateThumbnailProperties(hthumbnail, ctypes.byref(props))
+
+    def _fwd_mouse(proxy_hwnd: int, msg: int, wparam: int, lparam: int) -> None:
+        rect = wintypes.RECT()
+        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
+        cw, ch = rect.right, rect.bottom
+        if cw <= 0 or ch <= 0:
+            return
+        x = lparam & 0xFFFF
+        y = (lparam >> 16) & 0xFFFF
+        if x >= 0x8000: x -= 0x10000
+        if y >= 0x8000: y -= 0x10000
+        sx = max(0, min(int(x * game_w / cw), game_w - 1))
+        sy = max(0, min(int(y * game_h / ch), game_h - 1))
+        user32.PostMessageA(game_hwnd, msg, wparam, (sy << 16) | (sx & 0xFFFF))
+
+    def wndproc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+        nonlocal hthumbnail
+        if msg == _WM_SIZE:
+            cw, ch = lparam & 0xFFFF, (lparam >> 16) & 0xFFFF
+            if cw > 0 and ch > 0:
+                _update_thumb(cw, ch)
+            return 0
+        elif msg in _PROXY_MOUSE_MSGS:
+            _fwd_mouse(hwnd, msg, wparam, lparam)
+            return 0
+        elif msg in _PROXY_KEY_MSGS:
+            user32.PostMessageA(game_hwnd, msg, wparam, lparam)
+            return 0
+        elif msg == _WM_CLOSE:
+            if hthumbnail:
+                dwmapi.DwmUnregisterThumbnail(hthumbnail)
+                hthumbnail = None
+            user32.DestroyWindow(hwnd)
+            return 0
+        elif msg == _WM_DESTROY:
+            user32.PostQuitMessage(0)
+            return 0
+        return user32.DefWindowProcA(hwnd, msg, wparam, lparam)
+
+    _proxy_wndproc_ref = _WNDPROCTYPE(wndproc)
+    hinstance  = kernel32.GetModuleHandleA(None)
+    class_name = b"FF2Proxy"
+
+    wc = _WNDCLASSEX()
+    wc.cbSize        = ctypes.sizeof(_WNDCLASSEX)
+    wc.style         = _CS_HREDRAW | _CS_VREDRAW
+    wc.lpfnWndProc   = _proxy_wndproc_ref
+    wc.hInstance     = hinstance
+    wc.hCursor       = user32.LoadCursorW(0, 32512)
+    wc.hbrBackground = gdi32.GetStockObject(4)
+    wc.lpszClassName = class_name
+
+    if not user32.RegisterClassExA(ctypes.byref(wc)):
+        logger.error(f"[FF2] Proxy RegisterClassExA failed: {kernel32.GetLastError()}")
+        return
+
+    cr = wintypes.RECT(0, 0, game_w * 2, game_h * 2)
+    user32.AdjustWindowRect(ctypes.byref(cr), _WS_OVERLAPPEDWINDOW, False)
+
+    proxy_hwnd = user32.CreateWindowExA(
+        0, class_name, b"Feeding Frenzy 2",
+        _WS_OVERLAPPEDWINDOW | _WS_VISIBLE,
+        100, 100, cr.right - cr.left, cr.bottom - cr.top,
+        None, None, hinstance, None,
+    )
+    if not proxy_hwnd:
+        logger.error(f"[FF2] Proxy CreateWindowExA failed: {kernel32.GetLastError()}")
+        user32.UnregisterClassA(class_name, hinstance)
+        return
+
+    hr = dwmapi.DwmRegisterThumbnail(proxy_hwnd, game_hwnd, ctypes.byref(hthumbnail))
+    if hr != 0:
+        logger.error(f"[FF2] DwmRegisterThumbnail failed: 0x{hr & 0xFFFFFFFF:08X}")
+    else:
+        rect = wintypes.RECT()
+        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
+        _update_thumb(rect.right, rect.bottom)
+        logger.info(f"[FF2] Proxy window active (hwnd=0x{proxy_hwnd:08X})")
+
+    wmsg = wintypes.MSG()
+    while not stop_event.is_set():
+        if user32.PeekMessageA(ctypes.byref(wmsg), None, 0, 0, _PM_REMOVE):
+            if wmsg.message == _WM_QUIT:
+                break
+            user32.TranslateMessage(ctypes.byref(wmsg))
+            user32.DispatchMessageA(ctypes.byref(wmsg))
+        else:
+            time.sleep(0.001)
+
+    if hthumbnail:
+        dwmapi.DwmUnregisterThumbnail(hthumbnail)
+    user32.UnregisterClassA(class_name, hinstance)
+    logger.info("[FF2] Proxy window closed")
+
+
+def _start_proxy_window(stop_event: threading.Event) -> None:
+    user32 = ctypes.windll.user32
+    hwnd   = user32.FindWindowA(b"Gatsu", None)
+    if not hwnd:
+        logger.warning("[FF2] Could not find game window for proxy")
+        return
+    rect = wintypes.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(rect))
+    game_w = rect.right  or 800
+    game_h = rect.bottom or 600
+    logger.info(f"[FF2] Starting proxy window ({game_w}x{game_h})")
+    threading.Thread(
+        target=_run_proxy_window,
+        args=(hwnd, game_w, game_h, stop_event),
+        daemon=True,
+    ).start()
 
 
 # ── Thread / breakpoint helpers ───────────────────────────────────────────────
@@ -789,6 +986,7 @@ async def game_watcher(ctx: FF2Context):
         ctx.game_ready = True
         logger.info("[FF2] Game ready. Watching for checks...")
         make_window_resizable()
+        _start_proxy_window(ctx._stop_event)
 
         ctx._block_dash()
         if ctx.dash_received:

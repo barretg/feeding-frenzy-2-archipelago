@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import sys
 import threading
+import time
 
 PROCESS_NAME = "popcapgame1.exe"
 
@@ -411,6 +412,222 @@ def make_window_resizable():
     print(f"  [window] Resizable, cursor unclipped (hwnd=0x{hwnd:08X})")
     return True
 
+
+# ── Proxy window (DWM thumbnail approach) ─────────────────────────────────────
+# Creates a resizable Win32 window that shows the game via DwmRegisterThumbnail.
+# DWM handles GPU-accelerated scaling. Mouse/keyboard events are scaled and
+# forwarded to the game via PostMessageA. Game window is moved off-screen.
+
+PM_REMOVE      = 0x0001
+SWP_NOACTIVATE = 0x0010
+
+# DWM thumbnail flags
+DWM_TNP_RECTDESTINATION      = 0x1
+DWM_TNP_OPACITY              = 0x4
+DWM_TNP_VISIBLE              = 0x8
+DWM_TNP_SOURCECLIENTAREAONLY = 0x10
+
+WS_OVERLAPPEDWINDOW = 0x00CF0000
+WS_VISIBLE          = 0x10000000
+CS_HREDRAW          = 0x0002
+CS_VREDRAW          = 0x0001
+WM_DESTROY          = 0x0002
+WM_SIZE             = 0x0005
+WM_CLOSE            = 0x0010
+WM_QUIT             = 0x0012
+
+PROXY_MOUSE_MSGS = frozenset([0x200,0x201,0x202,0x203,0x204,0x205,0x206,0x207,0x208])
+PROXY_KEY_MSGS   = frozenset([0x100,0x101,0x102])
+
+class DWM_THUMBNAIL_PROPERTIES(ctypes.Structure):
+    _fields_ = [
+        ("dwFlags",               ctypes.c_uint),
+        ("rcDestination",         wintypes.RECT),
+        ("rcSource",              wintypes.RECT),
+        ("opacity",               ctypes.c_ubyte),
+        ("fVisible",              wintypes.BOOL),
+        ("fSourceClientAreaOnly", wintypes.BOOL),
+    ]
+
+# Explicit Win64 types — wintypes.WPARAM/LPARAM/LRESULT may be 32-bit on some
+# Python builds even on 64-bit Windows, so use c_longlong directly.
+_WPARAM  = ctypes.c_ulonglong
+_LPARAM  = ctypes.c_longlong
+_LRESULT = ctypes.c_longlong
+
+WNDPROCTYPE = ctypes.WINFUNCTYPE(
+    _LRESULT, wintypes.HWND, ctypes.c_uint, _WPARAM, _LPARAM
+)
+
+class WNDCLASSEX(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",        ctypes.c_uint),
+        ("style",         ctypes.c_uint),
+        ("lpfnWndProc",   WNDPROCTYPE),
+        ("cbClsExtra",    ctypes.c_int),
+        ("cbWndExtra",    ctypes.c_int),
+        ("hInstance",     wintypes.HANDLE),
+        ("hIcon",         wintypes.HANDLE),
+        ("hCursor",       wintypes.HANDLE),
+        ("hbrBackground", wintypes.HANDLE),
+        ("lpszMenuName",  ctypes.c_char_p),
+        ("lpszClassName", ctypes.c_char_p),
+        ("hIconSm",       wintypes.HANDLE),
+    ]
+
+_proxy_wndproc_ref = None   # keep WNDPROCTYPE callback alive
+
+
+def _run_proxy_window(game_hwnd, game_w, game_h, stop_event):
+    global _proxy_wndproc_ref
+    user32   = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    dwmapi   = ctypes.windll.dwmapi
+    gdi32    = ctypes.windll.gdi32
+
+    # Without argtypes, ctypes defaults to c_int for each arg (32-bit).
+    # On 64-bit Python, WPARAM/LPARAM are 64-bit so pointer-valued lparam values
+    # overflow — setting argtypes tells ctypes the correct widths.
+    _MSG_ARGS = [wintypes.HWND, ctypes.c_uint, _WPARAM, _LPARAM]
+    user32.DefWindowProcA.argtypes = _MSG_ARGS
+    user32.DefWindowProcA.restype  = _LRESULT
+    user32.PostMessageA.argtypes   = _MSG_ARGS
+    user32.PostMessageA.restype    = wintypes.BOOL
+
+    hthumbnail = wintypes.HANDLE(0)
+
+    def _update_thumb(cw, ch):
+        if not hthumbnail:
+            return
+        props = DWM_THUMBNAIL_PROPERTIES()
+        props.dwFlags = (DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY |
+                         DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY)
+        props.rcDestination = wintypes.RECT(0, 0, cw, ch)
+        props.opacity = 255
+        props.fVisible = True
+        props.fSourceClientAreaOnly = True
+        dwmapi.DwmUpdateThumbnailProperties(hthumbnail, ctypes.byref(props))
+
+    def _fwd_mouse(proxy_hwnd, msg, wparam, lparam):
+        rect = wintypes.RECT()
+        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
+        cw, ch = rect.right, rect.bottom
+        if cw <= 0 or ch <= 0:
+            return
+        x = lparam & 0xFFFF
+        y = (lparam >> 16) & 0xFFFF
+        if x >= 0x8000: x -= 0x10000
+        if y >= 0x8000: y -= 0x10000
+        sx = max(0, min(int(x * game_w / cw), game_w - 1))
+        sy = max(0, min(int(y * game_h / ch), game_h - 1))
+        user32.PostMessageA(game_hwnd, msg, wparam, (sy << 16) | (sx & 0xFFFF))
+
+    def wndproc(hwnd, msg, wparam, lparam):
+        nonlocal hthumbnail
+        if msg == WM_SIZE:
+            cw, ch = lparam & 0xFFFF, (lparam >> 16) & 0xFFFF
+            if cw > 0 and ch > 0:
+                _update_thumb(cw, ch)
+            return 0
+        elif msg in PROXY_MOUSE_MSGS:
+            _fwd_mouse(hwnd, msg, wparam, lparam)
+            return 0
+        elif msg in PROXY_KEY_MSGS:
+            user32.PostMessageA(game_hwnd, msg, wparam, lparam)
+            return 0
+        elif msg == WM_CLOSE:
+            if hthumbnail:
+                dwmapi.DwmUnregisterThumbnail(hthumbnail)
+                hthumbnail = None
+            user32.DestroyWindow(hwnd)
+            return 0
+        elif msg == WM_DESTROY:
+            user32.PostQuitMessage(0)
+            return 0
+        return user32.DefWindowProcA(hwnd, msg, wparam, lparam)
+
+    _proxy_wndproc_ref = WNDPROCTYPE(wndproc)
+    hinstance  = kernel32.GetModuleHandleA(None)
+    class_name = b"FF2Proxy"
+
+    wc = WNDCLASSEX()
+    wc.cbSize        = ctypes.sizeof(WNDCLASSEX)
+    wc.style         = CS_HREDRAW | CS_VREDRAW
+    wc.lpfnWndProc   = _proxy_wndproc_ref
+    wc.hInstance     = hinstance
+    wc.hCursor       = user32.LoadCursorW(0, 32512)          # IDC_ARROW
+    wc.hbrBackground = gdi32.GetStockObject(4)               # DKGRAY_BRUSH
+    wc.lpszClassName = class_name
+
+    if not user32.RegisterClassExA(ctypes.byref(wc)):
+        print(f"  [proxy] RegisterClassEx failed: {kernel32.GetLastError()}")
+        return
+
+    # Size window so client area starts at 2× game resolution
+    cr = wintypes.RECT(0, 0, game_w * 2, game_h * 2)
+    user32.AdjustWindowRect(ctypes.byref(cr), WS_OVERLAPPEDWINDOW, False)
+    init_w = cr.right  - cr.left
+    init_h = cr.bottom - cr.top
+
+    proxy_hwnd = user32.CreateWindowExA(
+        0, class_name, b"Feeding Frenzy 2",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        100, 100, init_w, init_h,
+        None, None, hinstance, None,
+    )
+    if not proxy_hwnd:
+        print(f"  [proxy] CreateWindowExA failed: {kernel32.GetLastError()}")
+        user32.UnregisterClassA(class_name, hinstance)
+        return
+
+    # Register DWM live thumbnail: game → proxy
+    hr = dwmapi.DwmRegisterThumbnail(proxy_hwnd, game_hwnd, ctypes.byref(hthumbnail))
+    if hr != 0:
+        print(f"  [proxy] DwmRegisterThumbnail failed: 0x{hr & 0xFFFFFFFF:08X}")
+    else:
+        rect = wintypes.RECT()
+        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
+        _update_thumb(rect.right, rect.bottom)
+        print(f"  [proxy] Live thumbnail active (proxy=0x{proxy_hwnd:08X})")
+
+    # Move game window off-screen — DWM still renders it for the thumbnail
+
+    msg = wintypes.MSG()
+    while not stop_event.is_set():
+        if user32.PeekMessageA(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
+            if msg.message == WM_QUIT:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageA(ctypes.byref(msg))
+        else:
+            time.sleep(0.001)
+
+    if hthumbnail:
+        dwmapi.DwmUnregisterThumbnail(hthumbnail)
+    user32.UnregisterClassA(class_name, hinstance)
+    print("  [proxy] Closed")
+
+
+def enable_scaling(stop_event):
+    user32 = ctypes.windll.user32
+    hwnd   = user32.FindWindowA(b"Gatsu", None)
+    if not hwnd:
+        print("  [proxy] Game window not found")
+        return False
+
+    rect = wintypes.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(rect))
+    game_w = rect.right  or 800
+    game_h = rect.bottom or 600
+    print(f"  [proxy] Game resolution: {game_w}x{game_h}")
+
+    threading.Thread(
+        target=_run_proxy_window,
+        args=(hwnd, game_w, game_h, stop_event),
+        daemon=True,
+    ).start()
+    return True
+
 def patch_dash_block(pm, base):
     addr = base + DASH_CALL_OFFSET
     if write_bytes(pm, addr, DASH_BLOCKED):
@@ -680,6 +897,7 @@ def print_help():
     print("    items: life, fish")
     print("  die [delay]         - trigger player death (optionally after delay seconds)")
     print("  resize              - make game window resizable (applied on startup)")
+    print("  scale               - enable render+input scaling (applied on startup)")
     print("  nodash              - block dash (applied on startup)")
     print("  dash                - unblock dash (simulate receiving Dash item)")
     print("  nosuck              - block suck (applied on startup)")
@@ -701,17 +919,19 @@ def main():
     ).lpBaseOfDll
     print(f"Base: 0x{base:08X}")
 
+    stop_event     = threading.Event()
+
     patch_focus_pause(pm, base)
     patch_dash_block(pm, base)
     patch_suck_block(pm, base)
     make_window_resizable()
+    enable_scaling(stop_event)
 
     level_obj = capture_level_object(pm, base)
 
     max_stage_addr = [None]
     fish_received  = [0]
     player_info    = [None]
-    stop_event     = threading.Event()
 
     def background_captures():
         # sequential — player fish first, then max stage
@@ -882,6 +1102,9 @@ def main():
 
         elif cmd == "resize":
             make_window_resizable()
+
+        elif cmd == "scale":
+            enable_scaling(stop_event)
 
         elif cmd == "nodash":
             patch_dash_block(pm, base)
