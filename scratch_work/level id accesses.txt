@@ -1,0 +1,1553 @@
+  Level object: 0x0270DB90
+
+When I press Start game it breaaks at 0049C070:
+0049C04F | CC                       | int3                                    |
+0049C050 | D9EE                     | fldz                                    |
+0049C052 | 33D2                     | xor edx,edx                             |
+0049C054 | 6A 03                    | push 3                                  |
+0049C056 | D950 38                  | fst dword ptr ds:[eax+38]               |
+0049C059 | 59                       | pop ecx                                 |
+0049C05A | D958 3C                  | fstp dword ptr ds:[eax+3C]              |
+0049C05D | C740 18 02000000         | mov dword ptr ds:[eax+18],2             |
+0049C064 | 8948 10                  | mov dword ptr ds:[eax+10],ecx           |
+0049C067 | 8950 14                  | mov dword ptr ds:[eax+14],edx           |
+0049C06A | 8950 2C                  | mov dword ptr ds:[eax+2C],edx           |
+0049C06D | 8950 28                  | mov dword ptr ds:[eax+28],edx           |
+0049C070 | 8970 0C                  | mov dword ptr ds:[eax+C],esi            |
+0049C073 | 8950 30                  | mov dword ptr ds:[eax+30],edx           |
+0049C076 | 8948 34                  | mov dword ptr ds:[eax+34],ecx           |
+0049C079 | 8950 40                  | mov dword ptr ds:[eax+40],edx           |
+0049C07C | E9 0F000000              | jmp popcapgame1.49C090                  |
+
+
+it then immediately breaks again at 00478DAB:
+00478D90 | 6A 68                    | push 68                                 |
+00478D92 | B8 BE294D00              | mov eax,popcapgame1.4D29BE              |
+00478D97 | E8 89420300              | call popcapgame1.4AD025                 |
+00478D9C | 8B45 10                  | mov eax,dword ptr ss:[ebp+10]           |
+00478D9F | 8B35 24C65A00            | mov esi,dword ptr ds:[5AC624]           |
+00478DA5 | 8B4E 3C                  | mov ecx,dword ptr ds:[esi+3C]           |
+00478DA8 | 8B51 28                  | mov edx,dword ptr ds:[ecx+28]           |
+00478DAB | 8B5D 08                  | mov ebx,dword ptr ss:[ebp+8]            |
+00478DAE | 8955 C4                  | mov dword ptr ss:[ebp-3C],edx           |
+00478DB1 | 8B96 B4000000            | mov edx,dword ptr ds:[esi+B4]           |
+00478DB7 | C1E0 05                  | shl eax,5                               |
+00478DBA | 8B7C10 58                | mov edi,dword ptr ds:[eax+edx+58]       |
+00478DBE | 8D41 50                  | lea eax,dword ptr ds:[ecx+50]           |
+00478DC1 | E8 DA020000              | call popcapgame1.4790A0                 |
+00478DC6 | 48                       | dec eax                                 |
+00478DC7 | 3BC7                     | cmp eax,edi                             |
+00478DC9 | 8945 C8                  | mov dword ptr ss:[ebp-38],eax           |
+00478DCC | 7C 03                    | jl popcapgame1.478DD1                   |
+00478DCE | 897D C8                  | mov dword ptr ss:[ebp-38],edi           |
+00478DD1 | 8B76 3C                  | mov esi,dword ptr ds:[esi+3C]           |
+00478DD4 | 8D45 8C                  | lea eax,dword ptr ss:[ebp-74]           |
+00478DD7 | 50                       | push eax                                |
+00478DD8 | 8BC6                     | mov eax,esi                             |
+00478DDA | E8 81A6F8FF              | call popcapgame1.403460                 |
+00478DDF | 33F6                     | xor esi,esi                             |
+00478DE1 | 8975 FC                  | mov dword ptr ss:[ebp-4],esi            |
+00478DE4 | 8B3D 24C65A00            | mov edi,dword ptr ds:[5AC624]           |
+00478DEA | 50                       | push eax                                |
+00478DEB | E8 C032F9FF              | call popcapgame1.40C0B0                 |
+00478DF0 | 33FF                     | xor edi,edi                             |
+00478DF2 | 56                       | push esi                                |
+00478DF3 | 47                       | inc edi                                 |
+00478DF4 | 57                       | push edi                                |
+00478DF5 | 8D4D 8C                  | lea ecx,dword ptr ss:[ebp-74]           |
+00478DF8 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478DFB | E8 60FAFCFF              | call popcapgame1.448860                 |
+00478E00 | 8D45 D0                  | lea eax,dword ptr ss:[ebp-30]           |
+00478E03 | E8 B891FEFF              | call popcapgame1.461FC0                 |
+00478E08 | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478E0B | 3BC6                     | cmp eax,esi                             |
+00478E0D | 897D FC                  | mov dword ptr ss:[ebp-4],edi            |
+00478E10 | 0F84 497C0700            | je popcapgame1.4F0A5F                   |
+00478E16 | 8D48 0C                  | lea ecx,dword ptr ds:[eax+C]            |
+00478E19 | E8 F2A5F8FF              | call popcapgame1.403410                 |
+00478E1E | 8B0D 24C65A00            | mov ecx,dword ptr ds:[5AC624]           |
+00478E24 | 8B49 3C                  | mov ecx,dword ptr ds:[ecx+3C]           |
+00478E27 | 8B49 28                  | mov ecx,dword ptr ds:[ecx+28]           |
+00478E2A | 50                       | push eax                                |
+00478E2B | 41                       | inc ecx                                 |
+00478E2C | 51                       | push ecx                                |
+00478E2D | 68 CC685500              | push popcapgame1.5568CC                 | 5568CC:"%d. %s"
+00478E32 | 8D75 D0                  | lea esi,dword ptr ss:[ebp-30]           |
+00478E35 | E8 462FFDFF              | call popcapgame1.44BD80                 |
+00478E3A | 83C4 0C                  | add esp,C                               |
+00478E3D | 33F6                     | xor esi,esi                             |
+00478E3F | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478E43 | 8B8B C8010000            | mov ecx,dword ptr ds:[ebx+1C8]          | ebx+1C8:"req"
+00478E49 | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00478E4B | 0F85 93010000            | jne popcapgame1.478FE4                  |
+00478E51 | 56                       | push esi                                |
+00478E52 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E58 | 8DB3 C4010000            | lea esi,dword ptr ds:[ebx+1C4]          | ebx+1C4:"ngeFreq"
+00478E5E | FF36                     | push dword ptr ds:[esi]                 |
+00478E60 | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478E63 | E8 8826FDFF              | call popcapgame1.44B4F0                 |
+00478E68 | 8B36                     | mov esi,dword ptr ds:[esi]              |
+00478E6A | 8B06                     | mov eax,dword ptr ds:[esi]              |
+00478E6C | 57                       | push edi                                |
+00478E6D | 8BCE                     | mov ecx,esi                             |
+00478E6F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E75 | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          | [ebx+1C0]:SetDependencyInfo+390125
+00478E7B | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00478E7D | 33F6                     | xor esi,esi                             |
+00478E7F | 56                       | push esi                                |
+00478E80 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E86 | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          | ebx+1BC:"eMoveChangeFreq"
+00478E8C | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00478E8E | 57                       | push edi                                |
+00478E8F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E95 | 68 F0685500              | push popcapgame1.5568F0                 | 5568F0:"mapNowLoadingPrompt"
+00478E9A | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478E9D | E8 BE2FFDFF              | call popcapgame1.44BE60                 |
+00478EA2 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00478EA5 | 50                       | push eax                                |
+00478EA6 | C645 FC 04               | mov byte ptr ss:[ebp-4],4               |
+00478EAA | E8 41170100              | call popcapgame1.48A5F0                 |
+00478EAF | 59                       | pop ecx                                 |
+00478EB0 | FFB3 BC010000            | push dword ptr ds:[ebx+1BC]             | ebx+1BC:"eMoveChangeFreq"
+00478EB6 | 8BC8                     | mov ecx,eax                             |
+00478EB8 | E8 3326FDFF              | call popcapgame1.44B4F0                 |
+00478EBD | 56                       | push esi                                |
+00478EBE | 57                       | push edi                                |
+00478EBF | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478EC2 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00478EC6 | E8 95F9FCFF              | call popcapgame1.448860                 |
+00478ECB | 8DBB CC010000            | lea edi,dword ptr ds:[ebx+1CC]          |
+00478ED1 | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478ED3 | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00478ED5 | 56                       | push esi                                |
+00478ED6 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478EDC | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478EDE | 6A 02                    | push 2                                  |
+00478EE0 | E8 BBEFF8FF              | call popcapgame1.407EA0                 |
+00478EE5 | 33F6                     | xor esi,esi                             |
+00478EE7 | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478EEB | 0F85 9D000000            | jne popcapgame1.478F8E                  |
+00478EF1 | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          |
+00478EF7 | 83C0 0C                  | add eax,C                               |
+00478EFA | E8 A1010000              | call popcapgame1.4790A0                 |
+00478EFF | 3BF0                     | cmp esi,eax                             |
+00478F01 | 73 36                    | jae popcapgame1.478F39                  |
+00478F03 | 3975 C4                  | cmp dword ptr ss:[ebp-3C],esi           |
+00478F06 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478F0C | 74 72                    | je popcapgame1.478F80                   |
+00478F0E | 33C0                     | xor eax,eax                             |
+00478F10 | 3B75 C4                  | cmp esi,dword ptr ss:[ebp-3C]           |
+00478F13 | 0F9CC0                   | setl al                                 |
+00478F16 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478F19 | 8BC7                     | mov eax,edi                             |
+00478F1B | E8 B00DF9FF              | call popcapgame1.409CD0                 |
+00478F20 | 3BF0                     | cmp esi,eax                             |
+00478F22 | 0F83 537B0700            | jae popcapgame1.4F0A7B                  |
+00478F28 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            | edi+04:"newGame"
+00478F2B | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478F2E | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478F31 | E8 3A34FFFF              | call popcapgame1.46C370                 |
+00478F36 | 46                       | inc esi                                 |
+00478F37 | EB B8                    | jmp popcapgame1.478EF1                  |
+00478F39 | 33C0                     | xor eax,eax                             |
+00478F3B | 8945 B4                  | mov dword ptr ss:[ebp-4C],eax           |
+00478F3E | 8945 B8                  | mov dword ptr ss:[ebp-48],eax           |
+00478F41 | 8945 BC                  | mov dword ptr ss:[ebp-44],eax           |
+00478F44 | 81C3 D0010000            | add ebx,1D0                             |
+00478F4A | 8B03                     | mov eax,dword ptr ds:[ebx]              |
+00478F4C | E8 2FCEFFFF              | call popcapgame1.475D80                 |
+00478F51 | 8945 C0                  | mov dword ptr ss:[ebp-40],eax           |
+00478F54 | 8B03                     | mov eax,dword ptr ds:[ebx]              |
+00478F56 | C680 A8000000 01         | mov byte ptr ds:[eax+A8],1              |
+00478F5D | 8B3B                     | mov edi,dword ptr ds:[ebx]              |
+00478F5F | 81C7 98000000            | add edi,98                              |
+00478F65 | 8D75 B4                  | lea esi,dword ptr ss:[ebp-4C]           |
+00478F68 | A5                       | movsd                                   |
+00478F69 | A5                       | movsd                                   |
+00478F6A | A5                       | movsd                                   |
+00478F6B | 6A 00                    | push 0                                  |
+00478F6D | 6A 01                    | push 1                                  |
+00478F6F | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478F72 | A5                       | movsd                                   |
+00478F73 | E8 E8F8FCFF              | call popcapgame1.448860                 |
+00478F78 | E8 2B410300              | call popcapgame1.4AD0A8                 |
+00478F7D | C2 0C00                  | ret C                                   |
+00478F80 | E8 1BDB0100              | call popcapgame1.496AA0                 |
+00478F85 | 8BC8                     | mov ecx,eax                             |
+00478F87 | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478F89 | 6A 02                    | push 2                                  |
+00478F8B | 58                       | pop eax                                 |
+00478F8C | EB A3                    | jmp popcapgame1.478F31                  |
+00478F8E | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          |
+00478F94 | 83C0 0C                  | add eax,C                               |
+00478F97 | E8 04010000              | call popcapgame1.4790A0                 |
+00478F9C | 3BF0                     | cmp esi,eax                             |
+00478F9E | 73 99                    | jae popcapgame1.478F39                  |
+00478FA0 | 3B75 C8                  | cmp esi,dword ptr ss:[ebp-38]           |
+00478FA3 | 7F 2C                    | jg popcapgame1.478FD1                   |
+00478FA5 | 837D C8 00               | cmp dword ptr ss:[ebp-38],0             |
+00478FA9 | 7E 26                    | jle popcapgame1.478FD1                  |
+00478FAB | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FB1 | 8BC7                     | mov eax,edi                             |
+00478FB3 | E8 180DF9FF              | call popcapgame1.409CD0                 |
+00478FB8 | 3BF0                     | cmp esi,eax                             |
+00478FBA | 0F83 B17A0700            | jae popcapgame1.4F0A71                  |
+00478FC0 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            | edi+04:"newGame"
+00478FC3 | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478FC6 | 6A 03                    | push 3                                  |
+00478FC8 | 58                       | pop eax                                 |
+00478FC9 | E8 A233FFFF              | call popcapgame1.46C370                 |
+00478FCE | 46                       | inc esi                                 |
+00478FCF | EB BD                    | jmp popcapgame1.478F8E                  |
+00478FD1 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FD7 | E8 C4DA0100              | call popcapgame1.496AA0                 |
+00478FDC | 8BC8                     | mov ecx,eax                             |
+00478FDE | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478FE0 | 33C0                     | xor eax,eax                             |
+00478FE2 | EB E5                    | jmp popcapgame1.478FC9                  |
+00478FE4 | 57                       | push edi                                |
+00478FE5 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478FEB | 68 0A055500              | push popcapgame1.55050A                 |
+00478FF0 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478FF3 | E8 682EFDFF              | call popcapgame1.44BE60                 |
+00478FF8 | C645 FC 02               | mov byte ptr ss:[ebp-4],2               |
+00478FFC | FFB3 C8010000            | push dword ptr ds:[ebx+1C8]             | ebx+1C8:"req"
+00479002 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479005 | E8 E624FDFF              | call popcapgame1.44B4F0                 |
+0047900A | 56                       | push esi                                |
+0047900B | 57                       | push edi                                |
+0047900C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047900F | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479013 | E8 48F8FCFF              | call popcapgame1.448860                 |
+00479018 | 8B8B C4010000            | mov ecx,dword ptr ds:[ebx+1C4]          | ebx+1C4:"ngeFreq"
+0047901E | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00479020 | 57                       | push edi                                |
+00479021 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00479027 | 68 DC685500              | push popcapgame1.5568DC                 | 5568DC:"mapSelectInstruct"
+0047902C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047902F | E8 2C2EFDFF              | call popcapgame1.44BE60                 |
+00479034 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00479037 | 50                       | push eax                                |
+00479038 | C645 FC 03               | mov byte ptr ss:[ebp-4],3               |
+0047903C | E8 AF150100              | call popcapgame1.48A5F0                 |
+00479041 | 59                       | pop ecx                                 |
+00479042 | FFB3 C4010000            | push dword ptr ds:[ebx+1C4]             | ebx+1C4:"ngeFreq"
+00479048 | 8BC8                     | mov ecx,eax                             |
+0047904A | E8 A124FDFF              | call popcapgame1.44B4F0                 |
+0047904F | 56                       | push esi                                |
+00479050 | 57                       | push edi                                |
+00479051 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479054 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479058 | E8 03F8FCFF              | call popcapgame1.448860                 |
+0047905D | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          | [ebx+1C0]:SetDependencyInfo+390125
+00479063 | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00479065 | 57                       | push edi                                |
+00479066 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047906C | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          | ebx+1BC:"eMoveChangeFreq"
+00479072 | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00479074 | 56                       | push esi                                |
+00479075 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047907B | 8DB3 CC010000            | lea esi,dword ptr ds:[ebx+1CC]          |
+00479081 | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+00479083 | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+00479085 | 57                       | push edi                                |
+00479086 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047908C | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+0047908E | 6A 02                    | push 2                                  |
+00479090 | 58                       | pop eax                                 |
+00479091 | E8 1AC9F8FF              | call popcapgame1.4059B0                 |
+00479096 | E9 4AFEFFFF              | jmp popcapgame1.478EE5                  |
+
+then immediately 0040346C:
+00403460 | 55                       | push ebp                                |
+00403461 | 8BEC                     | mov ebp,esp                             |
+00403463 | 51                       | push ecx                                |
+00403464 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+00403468 | 56                       | push esi                                |
+00403469 | FF70 28                  | push dword ptr ds:[eax+28]              |
+0040346C | 8D70 50                  | lea esi,dword ptr ds:[eax+50]           |
+0040346F | E8 5C070800              | call popcapgame1.483BD0                 |
+00403474 | 8B4D 08                  | mov ecx,dword ptr ss:[ebp+8]            |
+00403477 | 50                       | push eax                                |
+00403478 | E8 13D20400              | call popcapgame1.450690                 |
+0040347D | 8B45 08                  | mov eax,dword ptr ss:[ebp+8]            |
+00403480 | 5E                       | pop esi                                 |
+00403481 | C9                       | leave                                   |
+00403482 | C2 0400                  | ret 4                                   |
+
+then again at 00478E2A:
+00478D90 | 6A 68                    | push 68                                 |
+00478D92 | B8 BE294D00              | mov eax,popcapgame1.4D29BE              | eax:"Sandy Shoal "
+00478D97 | E8 89420300              | call popcapgame1.4AD025                 |
+00478D9C | 8B45 10                  | mov eax,dword ptr ss:[ebp+10]           |
+00478D9F | 8B35 24C65A00            | mov esi,dword ptr ds:[5AC624]           |
+00478DA5 | 8B4E 3C                  | mov ecx,dword ptr ds:[esi+3C]           |
+00478DA8 | 8B51 28                  | mov edx,dword ptr ds:[ecx+28]           |
+00478DAB | 8B5D 08                  | mov ebx,dword ptr ss:[ebp+8]            |
+00478DAE | 8955 C4                  | mov dword ptr ss:[ebp-3C],edx           |
+00478DB1 | 8B96 B4000000            | mov edx,dword ptr ds:[esi+B4]           |
+00478DB7 | C1E0 05                  | shl eax,5                               | eax:"Sandy Shoal "
+00478DBA | 8B7C10 58                | mov edi,dword ptr ds:[eax+edx+58]       |
+00478DBE | 8D41 50                  | lea eax,dword ptr ds:[ecx+50]           | eax:"Sandy Shoal "
+00478DC1 | E8 DA020000              | call popcapgame1.4790A0                 |
+00478DC6 | 48                       | dec eax                                 | eax:"Sandy Shoal "
+00478DC7 | 3BC7                     | cmp eax,edi                             | eax:"Sandy Shoal "
+00478DC9 | 8945 C8                  | mov dword ptr ss:[ebp-38],eax           |
+00478DCC | 7C 03                    | jl popcapgame1.478DD1                   |
+00478DCE | 897D C8                  | mov dword ptr ss:[ebp-38],edi           |
+00478DD1 | 8B76 3C                  | mov esi,dword ptr ds:[esi+3C]           |
+00478DD4 | 8D45 8C                  | lea eax,dword ptr ss:[ebp-74]           |
+00478DD7 | 50                       | push eax                                | eax:"Sandy Shoal "
+00478DD8 | 8BC6                     | mov eax,esi                             | eax:"Sandy Shoal "
+00478DDA | E8 81A6F8FF              | call popcapgame1.403460                 |
+00478DDF | 33F6                     | xor esi,esi                             |
+00478DE1 | 8975 FC                  | mov dword ptr ss:[ebp-4],esi            |
+00478DE4 | 8B3D 24C65A00            | mov edi,dword ptr ds:[5AC624]           |
+00478DEA | 50                       | push eax                                | eax:"Sandy Shoal "
+00478DEB | E8 C032F9FF              | call popcapgame1.40C0B0                 |
+00478DF0 | 33FF                     | xor edi,edi                             |
+00478DF2 | 56                       | push esi                                |
+00478DF3 | 47                       | inc edi                                 |
+00478DF4 | 57                       | push edi                                |
+00478DF5 | 8D4D 8C                  | lea ecx,dword ptr ss:[ebp-74]           |
+00478DF8 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478DFB | E8 60FAFCFF              | call popcapgame1.448860                 |
+00478E00 | 8D45 D0                  | lea eax,dword ptr ss:[ebp-30]           |
+00478E03 | E8 B891FEFF              | call popcapgame1.461FC0                 |
+00478E08 | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478E0B | 3BC6                     | cmp eax,esi                             | eax:"Sandy Shoal "
+00478E0D | 897D FC                  | mov dword ptr ss:[ebp-4],edi            |
+00478E10 | 0F84 497C0700            | je popcapgame1.4F0A5F                   |
+00478E16 | 8D48 0C                  | lea ecx,dword ptr ds:[eax+C]            |
+00478E19 | E8 F2A5F8FF              | call popcapgame1.403410                 |
+00478E1E | 8B0D 24C65A00            | mov ecx,dword ptr ds:[5AC624]           |
+00478E24 | 8B49 3C                  | mov ecx,dword ptr ds:[ecx+3C]           |
+00478E27 | 8B49 28                  | mov ecx,dword ptr ds:[ecx+28]           |
+00478E2A | 50                       | push eax                                | eax:"Sandy Shoal "
+00478E2B | 41                       | inc ecx                                 |
+00478E2C | 51                       | push ecx                                |
+00478E2D | 68 CC685500              | push popcapgame1.5568CC                 | 5568CC:"%d. %s"
+00478E32 | 8D75 D0                  | lea esi,dword ptr ss:[ebp-30]           |
+00478E35 | E8 462FFDFF              | call popcapgame1.44BD80                 |
+00478E3A | 83C4 0C                  | add esp,C                               |
+00478E3D | 33F6                     | xor esi,esi                             |
+00478E3F | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478E43 | 8B8B C8010000            | mov ecx,dword ptr ds:[ebx+1C8]          |
+00478E49 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00478E4B | 0F85 93010000            | jne popcapgame1.478FE4                  |
+00478E51 | 56                       | push esi                                |
+00478E52 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E58 | 8DB3 C4010000            | lea esi,dword ptr ds:[ebx+1C4]          |
+00478E5E | FF36                     | push dword ptr ds:[esi]                 |
+00478E60 | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478E63 | E8 8826FDFF              | call popcapgame1.44B4F0                 |
+00478E68 | 8B36                     | mov esi,dword ptr ds:[esi]              |
+00478E6A | 8B06                     | mov eax,dword ptr ds:[esi]              | eax:"Sandy Shoal "
+00478E6C | 57                       | push edi                                |
+00478E6D | 8BCE                     | mov ecx,esi                             |
+00478E6F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E75 | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          |
+00478E7B | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00478E7D | 33F6                     | xor esi,esi                             |
+00478E7F | 56                       | push esi                                |
+00478E80 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E86 | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          |
+00478E8C | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00478E8E | 57                       | push edi                                |
+00478E8F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E95 | 68 F0685500              | push popcapgame1.5568F0                 | 5568F0:"mapNowLoadingPrompt"
+00478E9A | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478E9D | E8 BE2FFDFF              | call popcapgame1.44BE60                 |
+00478EA2 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00478EA5 | 50                       | push eax                                | eax:"Sandy Shoal "
+00478EA6 | C645 FC 04               | mov byte ptr ss:[ebp-4],4               |
+00478EAA | E8 41170100              | call popcapgame1.48A5F0                 |
+00478EAF | 59                       | pop ecx                                 |
+00478EB0 | FFB3 BC010000            | push dword ptr ds:[ebx+1BC]             |
+00478EB6 | 8BC8                     | mov ecx,eax                             | eax:"Sandy Shoal "
+00478EB8 | E8 3326FDFF              | call popcapgame1.44B4F0                 |
+00478EBD | 56                       | push esi                                |
+00478EBE | 57                       | push edi                                |
+00478EBF | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478EC2 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00478EC6 | E8 95F9FCFF              | call popcapgame1.448860                 |
+00478ECB | 8DBB CC010000            | lea edi,dword ptr ds:[ebx+1CC]          |
+00478ED1 | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478ED3 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00478ED5 | 56                       | push esi                                |
+00478ED6 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478EDC | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478EDE | 6A 02                    | push 2                                  |
+00478EE0 | E8 BBEFF8FF              | call popcapgame1.407EA0                 |
+00478EE5 | 33F6                     | xor esi,esi                             |
+00478EE7 | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478EEB | 0F85 9D000000            | jne popcapgame1.478F8E                  |
+00478EF1 | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          | eax:"Sandy Shoal "
+00478EF7 | 83C0 0C                  | add eax,C                               | eax:"Sandy Shoal "
+00478EFA | E8 A1010000              | call popcapgame1.4790A0                 |
+00478EFF | 3BF0                     | cmp esi,eax                             | eax:"Sandy Shoal "
+00478F01 | 73 36                    | jae popcapgame1.478F39                  |
+00478F03 | 3975 C4                  | cmp dword ptr ss:[ebp-3C],esi           |
+00478F06 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478F0C | 74 72                    | je popcapgame1.478F80                   |
+00478F0E | 33C0                     | xor eax,eax                             | eax:"Sandy Shoal "
+00478F10 | 3B75 C4                  | cmp esi,dword ptr ss:[ebp-3C]           |
+00478F13 | 0F9CC0                   | setl al                                 |
+00478F16 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478F19 | 8BC7                     | mov eax,edi                             | eax:"Sandy Shoal "
+00478F1B | E8 B00DF9FF              | call popcapgame1.409CD0                 |
+00478F20 | 3BF0                     | cmp esi,eax                             | eax:"Sandy Shoal "
+00478F22 | 0F83 537B0700            | jae popcapgame1.4F0A7B                  |
+00478F28 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            |
+00478F2B | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478F2E | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478F31 | E8 3A34FFFF              | call popcapgame1.46C370                 |
+00478F36 | 46                       | inc esi                                 |
+00478F37 | EB B8                    | jmp popcapgame1.478EF1                  |
+00478F39 | 33C0                     | xor eax,eax                             | eax:"Sandy Shoal "
+00478F3B | 8945 B4                  | mov dword ptr ss:[ebp-4C],eax           |
+00478F3E | 8945 B8                  | mov dword ptr ss:[ebp-48],eax           |
+00478F41 | 8945 BC                  | mov dword ptr ss:[ebp-44],eax           |
+00478F44 | 81C3 D0010000            | add ebx,1D0                             |
+00478F4A | 8B03                     | mov eax,dword ptr ds:[ebx]              | eax:"Sandy Shoal "
+00478F4C | E8 2FCEFFFF              | call popcapgame1.475D80                 |
+00478F51 | 8945 C0                  | mov dword ptr ss:[ebp-40],eax           |
+00478F54 | 8B03                     | mov eax,dword ptr ds:[ebx]              | eax:"Sandy Shoal "
+00478F56 | C680 A8000000 01         | mov byte ptr ds:[eax+A8],1              | eax+A8:&"resource/stages/text/introTextLayout1.xml"
+00478F5D | 8B3B                     | mov edi,dword ptr ds:[ebx]              |
+00478F5F | 81C7 98000000            | add edi,98                              |
+00478F65 | 8D75 B4                  | lea esi,dword ptr ss:[ebp-4C]           |
+00478F68 | A5                       | movsd                                   |
+00478F69 | A5                       | movsd                                   |
+00478F6A | A5                       | movsd                                   |
+00478F6B | 6A 00                    | push 0                                  |
+00478F6D | 6A 01                    | push 1                                  |
+00478F6F | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478F72 | A5                       | movsd                                   |
+00478F73 | E8 E8F8FCFF              | call popcapgame1.448860                 |
+00478F78 | E8 2B410300              | call popcapgame1.4AD0A8                 |
+00478F7D | C2 0C00                  | ret C                                   |
+00478F80 | E8 1BDB0100              | call popcapgame1.496AA0                 |
+00478F85 | 8BC8                     | mov ecx,eax                             | eax:"Sandy Shoal "
+00478F87 | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478F89 | 6A 02                    | push 2                                  |
+00478F8B | 58                       | pop eax                                 | eax:"Sandy Shoal "
+00478F8C | EB A3                    | jmp popcapgame1.478F31                  |
+00478F8E | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          | eax:"Sandy Shoal "
+00478F94 | 83C0 0C                  | add eax,C                               | eax:"Sandy Shoal "
+00478F97 | E8 04010000              | call popcapgame1.4790A0                 |
+00478F9C | 3BF0                     | cmp esi,eax                             | eax:"Sandy Shoal "
+00478F9E | 73 99                    | jae popcapgame1.478F39                  |
+00478FA0 | 3B75 C8                  | cmp esi,dword ptr ss:[ebp-38]           |
+00478FA3 | 7F 2C                    | jg popcapgame1.478FD1                   |
+00478FA5 | 837D C8 00               | cmp dword ptr ss:[ebp-38],0             |
+00478FA9 | 7E 26                    | jle popcapgame1.478FD1                  |
+00478FAB | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FB1 | 8BC7                     | mov eax,edi                             | eax:"Sandy Shoal "
+00478FB3 | E8 180DF9FF              | call popcapgame1.409CD0                 |
+00478FB8 | 3BF0                     | cmp esi,eax                             | eax:"Sandy Shoal "
+00478FBA | 0F83 B17A0700            | jae popcapgame1.4F0A71                  |
+00478FC0 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            |
+00478FC3 | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478FC6 | 6A 03                    | push 3                                  |
+00478FC8 | 58                       | pop eax                                 | eax:"Sandy Shoal "
+00478FC9 | E8 A233FFFF              | call popcapgame1.46C370                 |
+00478FCE | 46                       | inc esi                                 |
+00478FCF | EB BD                    | jmp popcapgame1.478F8E                  |
+00478FD1 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FD7 | E8 C4DA0100              | call popcapgame1.496AA0                 |
+00478FDC | 8BC8                     | mov ecx,eax                             | eax:"Sandy Shoal "
+00478FDE | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478FE0 | 33C0                     | xor eax,eax                             | eax:"Sandy Shoal "
+00478FE2 | EB E5                    | jmp popcapgame1.478FC9                  |
+00478FE4 | 57                       | push edi                                |
+00478FE5 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478FEB | 68 0A055500              | push popcapgame1.55050A                 |
+00478FF0 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478FF3 | E8 682EFDFF              | call popcapgame1.44BE60                 |
+00478FF8 | C645 FC 02               | mov byte ptr ss:[ebp-4],2               |
+00478FFC | FFB3 C8010000            | push dword ptr ds:[ebx+1C8]             |
+00479002 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479005 | E8 E624FDFF              | call popcapgame1.44B4F0                 |
+0047900A | 56                       | push esi                                |
+0047900B | 57                       | push edi                                |
+0047900C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047900F | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479013 | E8 48F8FCFF              | call popcapgame1.448860                 |
+00479018 | 8B8B C4010000            | mov ecx,dword ptr ds:[ebx+1C4]          |
+0047901E | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00479020 | 57                       | push edi                                |
+00479021 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00479027 | 68 DC685500              | push popcapgame1.5568DC                 | 5568DC:"mapSelectInstruct"
+0047902C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047902F | E8 2C2EFDFF              | call popcapgame1.44BE60                 |
+00479034 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00479037 | 50                       | push eax                                | eax:"Sandy Shoal "
+00479038 | C645 FC 03               | mov byte ptr ss:[ebp-4],3               |
+0047903C | E8 AF150100              | call popcapgame1.48A5F0                 |
+00479041 | 59                       | pop ecx                                 |
+00479042 | FFB3 C4010000            | push dword ptr ds:[ebx+1C4]             |
+00479048 | 8BC8                     | mov ecx,eax                             | eax:"Sandy Shoal "
+0047904A | E8 A124FDFF              | call popcapgame1.44B4F0                 |
+0047904F | 56                       | push esi                                |
+00479050 | 57                       | push edi                                |
+00479051 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479054 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479058 | E8 03F8FCFF              | call popcapgame1.448860                 |
+0047905D | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          |
+00479063 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00479065 | 57                       | push edi                                |
+00479066 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047906C | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          |
+00479072 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00479074 | 56                       | push esi                                |
+00479075 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047907B | 8DB3 CC010000            | lea esi,dword ptr ds:[ebx+1CC]          |
+00479081 | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+00479083 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Sandy Shoal "
+00479085 | 57                       | push edi                                |
+00479086 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047908C | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+0047908E | 6A 02                    | push 2                                  |
+00479090 | 58                       | pop eax                                 | eax:"Sandy Shoal "
+00479091 | E8 1AC9F8FF              | call popcapgame1.4059B0                 |
+00479096 | E9 4AFEFFFF              | jmp popcapgame1.478EE5                  |
+
+I then clicked level 2 on the map and it broke at 0049C070 again
+
+It then breaks at 00411644:
+004112F0 | 6A 24                    | push 24                                 |
+004112F2 | B8 F5544D00              | mov eax,popcapgame1.4D54F5              |
+004112F7 | E8 29BD0900              | call popcapgame1.4AD025                 |
+004112FC | 8B7D 08                  | mov edi,dword ptr ss:[ebp+8]            |
+004112FF | B8 F0995500              | mov eax,popcapgame1.5599F0              | 5599F0:"newGame"
+00411304 | 8BD7                     | mov edx,edi                             |
+00411306 | 8BD9                     | mov ebx,ecx                             |
+00411308 | E8 136E0600              | call popcapgame1.478120                 |
+0041130D | 84C0                     | test al,al                              |
+0041130F | 0F85 A8010000            | jne popcapgame1.4114BD                  |
+00411315 | B8 F8995500              | mov eax,popcapgame1.5599F8              | 5599F8:"newTimedGame"
+0041131A | 8BD7                     | mov edx,edi                             |
+0041131C | E8 FF6D0600              | call popcapgame1.478120                 |
+00411321 | 84C0                     | test al,al                              |
+00411323 | 0F85 FB010000            | jne popcapgame1.411524                  |
+00411329 | B8 A0685500              | mov eax,popcapgame1.5568A0              | 5568A0:"gameMapCancel"
+0041132E | 8BD7                     | mov edx,edi                             |
+00411330 | E8 EB6D0600              | call popcapgame1.478120                 |
+00411335 | 84C0                     | test al,al                              |
+00411337 | 0F85 6A010000            | jne popcapgame1.4114A7                  |
+0041133D | B8 089A5500              | mov eax,popcapgame1.559A08              | 559A08:"quit"
+00411342 | 8BD7                     | mov edx,edi                             |
+00411344 | E8 D76D0600              | call popcapgame1.478120                 |
+00411349 | 84C0                     | test al,al                              |
+0041134B | 0F85 75030000            | jne popcapgame1.4116C6                  |
+00411351 | B8 109A5500              | mov eax,popcapgame1.559A10              | 559A10:"switchUser"
+00411356 | 8BD7                     | mov edx,edi                             |
+00411358 | E8 C36D0600              | call popcapgame1.478120                 |
+0041135D | 84C0                     | test al,al                              |
+0041135F | 0F85 E0000000            | jne popcapgame1.411445                  |
+00411365 | B8 1C9A5500              | mov eax,popcapgame1.559A1C              | 559A1C:"mainMenuOptions"
+0041136A | 8BD7                     | mov edx,edi                             |
+0041136C | E8 AF6D0600              | call popcapgame1.478120                 |
+00411371 | 84C0                     | test al,al                              |
+00411373 | 0F85 DA2E0E00            | jne popcapgame1.4F4253                  |
+00411379 | B8 2C9A5500              | mov eax,popcapgame1.559A2C              | 559A2C:"debugSelectLevel"
+0041137E | 8BD7                     | mov edx,edi                             |
+00411380 | E8 9B6D0600              | call popcapgame1.478120                 |
+00411385 | 84C0                     | test al,al                              |
+00411387 | 0F85 312F0E00            | jne popcapgame1.4F42BE                  |
+0041138D | B8 409A5500              | mov eax,popcapgame1.559A40              | 559A40:"highScores"
+00411392 | 8BD7                     | mov edx,edi                             |
+00411394 | E8 876D0600              | call popcapgame1.478120                 |
+00411399 | 84C0                     | test al,al                              |
+0041139B | 0F85 452F0E00            | jne popcapgame1.4F42E6                  |
+004113A1 | B8 4C9A5500              | mov eax,popcapgame1.559A4C              | 559A4C:"credits"
+004113A6 | 8BD7                     | mov edx,edi                             |
+004113A8 | E8 736D0600              | call popcapgame1.478120                 |
+004113AD | 84C0                     | test al,al                              |
+004113AF | 0F85 542F0E00            | jne popcapgame1.4F4309                  |
+004113B5 | B8 549A5500              | mov eax,popcapgame1.559A54              | 559A54:"creditsDone"
+004113BA | 8BD7                     | mov edx,edi                             |
+004113BC | E8 5F6D0600              | call popcapgame1.478120                 |
+004113C1 | 84C0                     | test al,al                              |
+004113C3 | 0F85 DE000000            | jne popcapgame1.4114A7                  |
+004113C9 | B8 609A5500              | mov eax,popcapgame1.559A60              | 559A60:"highScoreDone"
+004113CE | 8BD7                     | mov edx,edi                             |
+004113D0 | E8 4B6D0600              | call popcapgame1.478120                 |
+004113D5 | 84C0                     | test al,al                              |
+004113D7 | 0F85 CA000000            | jne popcapgame1.4114A7                  |
+004113DD | B8 709A5500              | mov eax,popcapgame1.559A70              | 559A70:"scoreModeRight"
+004113E2 | 8BD7                     | mov edx,edi                             |
+004113E4 | E8 376D0600              | call popcapgame1.478120                 |
+004113E9 | 84C0                     | test al,al                              |
+004113EB | 0F85 272F0E00            | jne popcapgame1.4F4318                  |
+004113F1 | B8 809A5500              | mov eax,popcapgame1.559A80              | 559A80:"scoreModeLeft"
+004113F6 | 8BD7                     | mov edx,edi                             |
+004113F8 | E8 236D0600              | call popcapgame1.478120                 |
+004113FD | 84C0                     | test al,al                              |
+004113FF | 0F85 132F0E00            | jne popcapgame1.4F4318                  |
+00411405 | B8 909A5500              | mov eax,popcapgame1.559A90              | 559A90:"highScoreReset"
+0041140A | 8BD7                     | mov edx,edi                             |
+0041140C | E8 0F6D0600              | call popcapgame1.478120                 |
+00411411 | 84C0                     | test al,al                              |
+00411413 | 0F85 122F0E00            | jne popcapgame1.4F432B                  |
+00411419 | 6A 00                    | push 0                                  |
+0041141B | 68 A09A5500              | push popcapgame1.559AA0                 | 559AA0:"levelStart"
+00411420 | 57                       | push edi                                |
+00411421 | E8 CADBFFFF              | call popcapgame1.40EFF0                 |
+00411426 | 83F8 FF                  | cmp eax,FFFFFFFF                        |
+00411429 | 0F85 8D010000            | jne popcapgame1.4115BC                  |
+0041142F | B8 C09A5500              | mov eax,popcapgame1.559AC0              | 559AC0:"gameLinkClick"
+00411434 | 8BD7                     | mov edx,edi                             |
+00411436 | E8 E56C0600              | call popcapgame1.478120                 |
+0041143B | 84C0                     | test al,al                              |
+0041143D | 0F85 272F0E00            | jne popcapgame1.4F436A                  |
+00411443 | EB 5A                    | jmp popcapgame1.41149F                  |
+00411445 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411448 | 8B48 60                  | mov ecx,dword ptr ds:[eax+60]           |
+0041144B | 8B11                     | mov edx,dword ptr ds:[ecx]              |
+0041144D | 50                       | push eax                                |
+0041144E | FF92 80010000            | call dword ptr ds:[edx+180]             |
+00411454 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411457 | 83A0 30030000 00         | and dword ptr ds:[eax+330],0            |
+0041145E | 68 9C000000              | push 9C                                 |
+00411463 | E8 308C0900              | call popcapgame1.4AA098                 |
+00411468 | 59                       | pop ecx                                 |
+00411469 | 8945 D0                  | mov dword ptr ss:[ebp-30],eax           |
+0041146C | 85C0                     | test eax,eax                            |
+0041146E | C745 FC 05000000         | mov dword ptr ss:[ebp-4],5              |
+00411475 | 0F84 E12E0E00            | je popcapgame1.4F435C                   |
+0041147B | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+0041147E | 8B48 60                  | mov ecx,dword ptr ds:[eax+60]           |
+00411481 | 53                       | push ebx                                |
+00411482 | 51                       | push ecx                                |
+00411483 | 50                       | push eax                                |
+00411484 | FF75 D0                  | push dword ptr ss:[ebp-30]              |
+00411487 | E8 34950700              | call popcapgame1.48A9C0                 |
+0041148C | 834D FC FF               | or dword ptr ss:[ebp-4],FFFFFFFF        |
+00411490 | 8B5B 0C                  | mov ebx,dword ptr ds:[ebx+C]            |
+00411493 | 8D8B 54030000            | lea ecx,dword ptr ds:[ebx+354]          | ebx+354:"ngeFreq"
+00411499 | 8B11                     | mov edx,dword ptr ds:[ecx]              |
+0041149B | 50                       | push eax                                |
+0041149C | FF52 14                  | call dword ptr ds:[edx+14]              |
+0041149F | E8 04BC0900              | call popcapgame1.4AD0A8                 |
+004114A4 | C2 0400                  | ret 4                                   |
+004114A7 | 8B5B 0C                  | mov ebx,dword ptr ds:[ebx+C]            |
+004114AA | 51                       | push ecx                                |
+004114AB | 8B4B 28                  | mov ecx,dword ptr ds:[ebx+28]           | ebx+28:"runStateChangeFreq"
+004114AE | D9EE                     | fldz                                    |
+004114B0 | D91C24                   | fstp dword ptr ss:[esp]                 |
+004114B3 | FF73 24                  | push dword ptr ds:[ebx+24]              |
+004114B6 | E8 F583FFFF              | call popcapgame1.4098B0                 |
+004114BB | EB E2                    | jmp popcapgame1.41149F                  |
+004114BD | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004114C0 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+004114C3 | 33F6                     | xor esi,esi                             |
+004114C5 | E8 86AB0800              | call popcapgame1.49C050                 |
+004114CA | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004114CD | 8B88 B4000000            | mov ecx,dword ptr ds:[eax+B4]           |
+004114D3 | 33C0                     | xor eax,eax                             |
+004114D5 | E8 66E50800              | call popcapgame1.49FA40                 |
+004114DA | 84C0                     | test al,al                              |
+004114DC | 0F84 AE2C0E00            | je popcapgame1.4F4190                   |
+004114E2 | 68 9C000000              | push 9C                                 |
+004114E7 | E8 AC8B0900              | call popcapgame1.4AA098                 |
+004114EC | 59                       | pop ecx                                 |
+004114ED | 8945 D0                  | mov dword ptr ss:[ebp-30],eax           |
+004114F0 | 2175 FC                  | and dword ptr ss:[ebp-4],esi            |
+004114F3 | 85C0                     | test eax,eax                            |
+004114F5 | 0F84 8E2C0E00            | je popcapgame1.4F4189                   |
+004114FB | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004114FE | 8B48 7C                  | mov ecx,dword ptr ds:[eax+7C]           |
+00411501 | 53                       | push ebx                                |
+00411502 | 51                       | push ecx                                |
+00411503 | 50                       | push eax                                |
+00411504 | FF75 D0                  | push dword ptr ss:[ebp-30]              |
+00411507 | E8 B4940700              | call popcapgame1.48A9C0                 |
+0041150C | 834D FC FF               | or dword ptr ss:[ebp-4],FFFFFFFF        |
+00411510 | 8B4B 0C                  | mov ecx,dword ptr ds:[ebx+C]            |
+00411513 | 81C1 54030000            | add ecx,354                             |
+00411519 | 8B11                     | mov edx,dword ptr ds:[ecx]              |
+0041151B | 50                       | push eax                                |
+0041151C | FF52 14                  | call dword ptr ds:[edx+14]              |
+0041151F | E9 F1FDFFFF              | jmp popcapgame1.411315                  |
+00411524 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411527 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0041152A | 33F6                     | xor esi,esi                             |
+0041152C | 46                       | inc esi                                 |
+0041152D | E8 1EAB0800              | call popcapgame1.49C050                 |
+00411532 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411535 | 8B88 B4000000            | mov ecx,dword ptr ds:[eax+B4]           |
+0041153B | 33C0                     | xor eax,eax                             |
+0041153D | 40                       | inc eax                                 |
+0041153E | E8 FDE40800              | call popcapgame1.49FA40                 |
+00411543 | 84C0                     | test al,al                              |
+00411545 | 0F85 E02C0E00            | jne popcapgame1.4F422B                  |
+0041154B | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+0041154E | C680 24030000 01         | mov byte ptr ds:[eax+324],1             |
+00411555 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411558 | E8 C3E40800              | call popcapgame1.49FA20                 |
+0041155D | 84C0                     | test al,al                              |
+0041155F | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411562 | 0F85 3C010000            | jne popcapgame1.4116A4                  |
+00411568 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0041156B | E8 00960800              | call popcapgame1.49AB70                 |
+00411570 | 8BF0                     | mov esi,eax                             |
+00411572 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411575 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+00411578 | 8B4E 44                  | mov ecx,dword ptr ds:[esi+44]           |
+0041157B | 6A 38                    | push 38                                 |
+0041157D | 8948 2C                  | mov dword ptr ds:[eax+2C],ecx           |
+00411580 | E8 138B0900              | call popcapgame1.4AA098                 |
+00411585 | 59                       | pop ecx                                 |
+00411586 | 8945 D0                  | mov dword ptr ss:[ebp-30],eax           |
+00411589 | 85C0                     | test eax,eax                            |
+0041158B | C745 FC 03000000         | mov dword ptr ss:[ebp-4],3              |
+00411592 | 0F84 60010000            | je popcapgame1.4116F8                   |
+00411598 | 6A 00                    | push 0                                  |
+0041159A | 56                       | push esi                                |
+0041159B | FF73 0C                  | push dword ptr ds:[ebx+C]               |
+0041159E | 50                       | push eax                                |
+0041159F | E8 7C130800              | call popcapgame1.492920                 |
+004115A4 | 834D FC FF               | or dword ptr ss:[ebp-4],FFFFFFFF        |
+004115A8 | 8B5B 0C                  | mov ebx,dword ptr ds:[ebx+C]            |
+004115AB | 8D8B 54030000            | lea ecx,dword ptr ds:[ebx+354]          | ebx+354:"ngeFreq"
+004115B1 | 8B11                     | mov edx,dword ptr ds:[ecx]              |
+004115B3 | 50                       | push eax                                |
+004115B4 | FF52 1C                  | call dword ptr ds:[edx+1C]              |
+004115B7 | E9 E3FEFFFF              | jmp popcapgame1.41149F                  |
+004115BC | D9E8                     | fld1                                    |
+004115BE | 83EC 24                  | sub esp,24                              |
+004115C1 | D95424 20                | fst dword ptr ss:[esp+20]               |
+004115C5 | 8BCC                     | mov ecx,esp                             |
+004115C7 | D95C24 1C                | fstp dword ptr ss:[esp+1C]              |
+004115CB | 8965 D0                  | mov dword ptr ss:[ebp-30],esp           |
+004115CE | 68 AC9A5500              | push popcapgame1.559AAC                 | 559AAC:"levelChooseSound"
+004115D3 | E8 88A80300              | call popcapgame1.44BE60                 |
+004115D8 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004115DB | 8B88 AC000000            | mov ecx,dword ptr ds:[eax+AC]           |
+004115E1 | E8 BA310600              | call popcapgame1.4747A0                 |
+004115E6 | 6A 00                    | push 0                                  |
+004115E8 | 68 C8685500              | push popcapgame1.5568C8                 |
+004115ED | 57                       | push edi                                |
+004115EE | E8 FDD9FFFF              | call popcapgame1.40EFF0                 |
+004115F3 | 6A FF                    | push FFFFFFFF                           |
+004115F5 | 40                       | inc eax                                 |
+004115F6 | 50                       | push eax                                |
+004115F7 | 57                       | push edi                                |
+004115F8 | 8D75 D4                  | lea esi,dword ptr ss:[ebp-2C]           |
+004115FB | E8 50B10300              | call popcapgame1.44C750                 |
+00411600 | C745 FC 09000000         | mov dword ptr ss:[ebp-4],9              | 09:'\t'
+00411607 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+0041160A | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0041160D | 8B70 0C                  | mov esi,dword ptr ds:[eax+C]            |
+00411610 | E8 3BAA0800              | call popcapgame1.49C050                 |
+00411615 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411618 | 8B48 3C                  | mov ecx,dword ptr ds:[eax+3C]           |
+0041161B | FFB0 B4000000            | push dword ptr ds:[eax+B4]              |
+00411621 | 8B49 0C                  | mov ecx,dword ptr ds:[ecx+C]            |
+00411624 | E8 976A0800              | call popcapgame1.4980C0                 |
+00411629 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+0041162C | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0041162F | 8D4D D4                  | lea ecx,dword ptr ss:[ebp-2C]           |
+00411632 | 51                       | push ecx                                |
+00411633 | 83C0 44                  | add eax,44                              |
+00411636 | E8 55250700              | call popcapgame1.483B90                 |
+0041163B | 8B4B 0C                  | mov ecx,dword ptr ds:[ebx+C]            |
+0041163E | 8B49 3C                  | mov ecx,dword ptr ds:[ecx+3C]           |
+00411641 | 8941 28                  | mov dword ptr ds:[ecx+28],eax           |
+00411644 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411647 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0041164A | E8 21950800              | call popcapgame1.49AB70                 |
+0041164F | 8BF0                     | mov esi,eax                             |
+00411651 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+00411654 | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+00411657 | 8B4E 44                  | mov ecx,dword ptr ds:[esi+44]           |
+0041165A | 6A 38                    | push 38                                 |
+0041165C | 8948 2C                  | mov dword ptr ds:[eax+2C],ecx           |
+0041165F | E8 348A0900              | call popcapgame1.4AA098                 |
+00411664 | 59                       | pop ecx                                 |
+00411665 | 8945 D0                  | mov dword ptr ss:[ebp-30],eax           |
+00411668 | 85C0                     | test eax,eax                            |
+0041166A | C645 FC 0A               | mov byte ptr ss:[ebp-4],A               | 0A:'\n'
+0041166E | 0F84 EF2C0E00            | je popcapgame1.4F4363                   |
+00411674 | 6A 00                    | push 0                                  |
+00411676 | 56                       | push esi                                |
+00411677 | FF73 0C                  | push dword ptr ds:[ebx+C]               |
+0041167A | 50                       | push eax                                |
+0041167B | E8 A0120800              | call popcapgame1.492920                 |
+00411680 | C645 FC 09               | mov byte ptr ss:[ebp-4],9               | 09:'\t'
+00411684 | 8B5B 0C                  | mov ebx,dword ptr ds:[ebx+C]            |
+00411687 | 8D8B 54030000            | lea ecx,dword ptr ds:[ebx+354]          | ebx+354:"ngeFreq"
+0041168D | 8B11                     | mov edx,dword ptr ds:[ecx]              |
+0041168F | 50                       | push eax                                |
+00411690 | FF52 1C                  | call dword ptr ds:[edx+1C]              |
+00411693 | 6A 00                    | push 0                                  |
+00411695 | 6A 01                    | push 1                                  |
+00411697 | 8D4D D4                  | lea ecx,dword ptr ss:[ebp-2C]           |
+0041169A | E8 C1710300              | call popcapgame1.448860                 |
+0041169F | E9 FBFDFFFF              | jmp popcapgame1.41149F                  |
+004116A4 | 8B48 3C                  | mov ecx,dword ptr ds:[eax+3C]           |
+004116A7 | FF71 0C                  | push dword ptr ds:[ecx+C]               |
+004116AA | 6A 01                    | push 1                                  |
+004116AC | FFB0 84000000            | push dword ptr ds:[eax+84]              |
+004116B2 | E8 D9760600              | call popcapgame1.478D90                 |
+004116B7 | 8B5B 0C                  | mov ebx,dword ptr ds:[ebx+C]            |
+004116BA | 51                       | push ecx                                |
+004116BB | 8B8B 84000000            | mov ecx,dword ptr ds:[ebx+84]           | ebx+84:"Base"
+004116C1 | E9 E8FDFFFF              | jmp popcapgame1.4114AE                  |
+004116C6 | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004116C9 | 83A0 30030000 00         | and dword ptr ds:[eax+330],0            |
+004116D0 | 68 9C000000              | push 9C                                 |
+004116D5 | E8 BE890900              | call popcapgame1.4AA098                 |
+004116DA | 59                       | pop ecx                                 |
+004116DB | 8945 D0                  | mov dword ptr ss:[ebp-30],eax           |
+004116DE | 85C0                     | test eax,eax                            |
+004116E0 | C745 FC 04000000         | mov dword ptr ss:[ebp-4],4              |
+004116E7 | 0F84 6F2C0E00            | je popcapgame1.4F435C                   |
+004116ED | 8B43 0C                  | mov eax,dword ptr ds:[ebx+C]            |
+004116F0 | 8B48 68                  | mov ecx,dword ptr ds:[eax+68]           |
+004116F3 | E9 89FDFFFF              | jmp popcapgame1.411481                  |
+004116F8 | 33C0                     | xor eax,eax                             |
+004116FA | E9 A5FEFFFF              | jmp popcapgame1.4115A4                  |
+004116FF | CC                       | int3                                    |
+00411700 | 6A 40                    | push 40                                 |
+00411702 | B8 2EC44C00              | mov eax,popcapgame1.4CC42E              |
+00411707 | E8 B0B80900              | call popcapgame1.4ACFBC                 |
+0041170C | 8D45 B4                  | lea eax,dword ptr ss:[ebp-4C]           |
+0041170F | 50                       | push eax                                |
+00411710 | E8 AB810800              | call popcapgame1.4998C0                 |
+00411715 | 8B5D 10                  | mov ebx,dword ptr ss:[ebp+10]           |
+00411718 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+0041171C | 8D4D DC                  | lea ecx,dword ptr ss:[ebp-24]           |
+0041171F | 81C3 F0000000            | add ebx,F0                              |
+00411725 | 8B03                     | mov eax,dword ptr ds:[ebx]              |
+00411727 | 51                       | push ecx                                |
+00411728 | 8BCB                     | mov ecx,ebx                             |
+0041172A | FF50 28                  | call dword ptr ds:[eax+28]              |
+0041172D | 8B4D 08                  | mov ecx,dword ptr ss:[ebp+8]            |
+00411730 | 81C1 30030000            | add ecx,330                             |
+00411736 | 8D45 E4                  | lea eax,dword ptr ss:[ebp-1C]           |
+00411739 | 894D 08                  | mov dword ptr ss:[ebp+8],ecx            |
+0041173C | E8 5FDA0800              | call popcapgame1.49F1A0                 |
+00411741 | 8B4D 08                  | mov ecx,dword ptr ss:[ebp+8]            |
+00411744 | 8D45 D4                  | lea eax,dword ptr ss:[ebp-2C]           |
+00411747 | E8 940EFFFF              | call popcapgame1.4025E0                 |
+0041174C | 8BF8                     | mov edi,eax                             |
+0041174E | 8D75 E4                  | lea esi,dword ptr ss:[ebp-1C]           |
+00411751 | E8 9A8E0800              | call popcapgame1.49A5F0                 |
+00411756 | 84C0                     | test al,al                              |
+00411758 | 74 63                    | je popcapgame1.4117BD                   |
+0041175A | E8 41D50800              | call popcapgame1.49ECA0                 |
+0041175F | 8B30                     | mov esi,dword ptr ds:[eax]              |
+00411761 | 8B06                     | mov eax,dword ptr ds:[esi]              |
+00411763 | 8BCE                     | mov ecx,esi                             |
+00411765 | 8975 F0                  | mov dword ptr ss:[ebp-10],esi           |
+00411768 | FF90 E4000000            | call dword ptr ds:[eax+E4]              |
+0041176E | 84C0                     | test al,al                              |
+00411770 | 75 25                    | jne popcapgame1.411797                  |
+00411772 | FF75 10                  | push dword ptr ss:[ebp+10]              |
+00411775 | 8B06                     | mov eax,dword ptr ds:[esi]              |
+00411777 | 8BCE                     | mov ecx,esi                             |
+00411779 | FF90 A8000000            | call dword ptr ds:[eax+A8]              |
+0041177F | 84C0                     | test al,al                              |
+00411781 | 74 14                    | je popcapgame1.411797                   |
+00411783 | 8B03                     | mov eax,dword ptr ds:[ebx]              |
+00411785 | 8BCB                     | mov ecx,ebx                             |
+00411787 | FF50 08                  | call dword ptr ds:[eax+8]               |
+0041178A | 8BF8                     | mov edi,eax                             |
+0041178C | 8B06                     | mov eax,dword ptr ds:[esi]              |
+0041178E | 8BCE                     | mov ecx,esi                             |
+00411790 | FF50 74                  | call dword ptr ds:[eax+74]              |
+00411793 | 3BF8                     | cmp edi,eax                             |
+00411795 | 7E 0A                    | jle popcapgame1.4117A1                  |
+00411797 | 8D75 E4                  | lea esi,dword ptr ss:[ebp-1C]           |
+0041179A | E8 612A0800              | call popcapgame1.494200                 |
+0041179F | EB A0                    | jmp popcapgame1.411741                  |
+004117A1 | 8B06                     | mov eax,dword ptr ds:[esi]              |
+004117A3 | 8BCE                     | mov ecx,esi                             |
+004117A5 | FF90 14010000            | call dword ptr ds:[eax+114]             |
+004117AB | 84C0                     | test al,al                              |
+004117AD | 75 E8                    | jne popcapgame1.411797                  |
+004117AF | 8D45 F0                  | lea eax,dword ptr ss:[ebp-10]           |
+004117B2 | 50                       | push eax                                |
+004117B3 | 8D45 B4                  | lea eax,dword ptr ss:[ebp-4C]           |
+004117B6 | E8 45D20000              | call popcapgame1.41EA00                 |
+004117BB | EB DA                    | jmp popcapgame1.411797                  |
+004117BD | 8D45 B4                  | lea eax,dword ptr ss:[ebp-4C]           |
+004117C0 | E8 6BFF0700              | call popcapgame1.491730                 |
+004117C5 | 84C0                     | test al,al                              |
+004117C7 | 0F85 C6000000            | jne popcapgame1.411893                  |
+004117CD | D905 546B5600            | fld dword ptr ds:[566B54]               |
+004117D3 | 8D45 EC                  | lea eax,dword ptr ss:[ebp-14]           |
+004117D6 | 8D4D B4                  | lea ecx,dword ptr ss:[ebp-4C]           |
+004117D9 | D95D 08                  | fstp dword ptr ss:[ebp+8]               |
+004117DC | E8 FF0DFFFF              | call popcapgame1.4025E0                 |
+004117E1 | 8D45 E4                  | lea eax,dword ptr ss:[ebp-1C]           |
+004117E4 | 8D4D B4                  | lea ecx,dword ptr ss:[ebp-4C]           |
+004117E7 | E8 B4D90800              | call popcapgame1.49F1A0                 |
+004117EC | 8D45 CC                  | lea eax,dword ptr ss:[ebp-34]           |
+004117EF | 8D4D B4                  | lea ecx,dword ptr ss:[ebp-4C]           |
+004117F2 | E8 E90DFFFF              | call popcapgame1.4025E0                 |
+004117F7 | 8BF8                     | mov edi,eax                             |
+004117F9 | 8D75 E4                  | lea esi,dword ptr ss:[ebp-1C]           |
+004117FC | E8 EF8D0800              | call popcapgame1.49A5F0                 |
+00411801 | 84C0                     | test al,al                              |
+00411803 | 74 50                    | je popcapgame1.411855                   |
+00411805 | E8 96D40800              | call popcapgame1.49ECA0                 |
+0041180A | 8B08                     | mov ecx,dword ptr ds:[eax]              |
+0041180C | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+0041180E | FF50 2C                  | call dword ptr ds:[eax+2C]              |
+00411811 | 8D4D DC                  | lea ecx,dword ptr ss:[ebp-24]           |
+00411814 | 51                       | push ecx                                |
+00411815 | 8BC8                     | mov ecx,eax                             |
+00411817 | 8D45 D4                  | lea eax,dword ptr ss:[ebp-2C]           |
+0041181A | E8 31B80200              | call popcapgame1.43D050                 |
+0041181F | 8D75 D4                  | lea esi,dword ptr ss:[ebp-2C]           |
+00411822 | E8 29BC0200              | call popcapgame1.43D450                 |
+00411827 | D95D 10                  | fstp dword ptr ss:[ebp+10]              |
+0041182A | D945 10                  | fld dword ptr ss:[ebp+10]               |
+0041182D | D945 08                  | fld dword ptr ss:[ebp+8]                |
+00411830 | DED9                     | fcompp                                  |
+00411832 | DFE0                     | fnstsw ax                               |
+00411834 | F6C4 41                  | test ah,41                              |
+00411837 | 75 12                    | jne popcapgame1.41184B                  |
+00411839 | 8B45 E4                  | mov eax,dword ptr ss:[ebp-1C]           |
+0041183C | D945 10                  | fld dword ptr ss:[ebp+10]               |
+0041183F | 8945 EC                  | mov dword ptr ss:[ebp-14],eax           |
+00411842 | D95D 08                  | fstp dword ptr ss:[ebp+8]               |
+00411845 | 8B45 E8                  | mov eax,dword ptr ss:[ebp-18]           |
+00411848 | 8945 F0                  | mov dword ptr ss:[ebp-10],eax           |
+0041184B | 8D75 E4                  | lea esi,dword ptr ss:[ebp-1C]           |
+0041184E | E8 AD290800              | call popcapgame1.494200                 |
+00411853 | EB 97                    | jmp popcapgame1.4117EC                  |
+00411855 | 8D75 EC                  | lea esi,dword ptr ss:[ebp-14]           |
+00411858 | E8 43D40800              | call popcapgame1.49ECA0                 |
+0041185D | 50                       | push eax                                |
+0041185E | 8B45 0C                  | mov eax,dword ptr ss:[ebp+C]            |
+00411861 | E8 9AD10000              | call popcapgame1.41EA00                 |
+00411866 | E8 35D40800              | call popcapgame1.49ECA0                 |
+0041186B | 8B08                     | mov ecx,dword ptr ds:[eax]              |
+0041186D | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+0041186F | FF50 2C                  | call dword ptr ds:[eax+2C]              |
+00411872 | 8B08                     | mov ecx,dword ptr ds:[eax]              |
+00411874 | FF75 F0                  | push dword ptr ss:[ebp-10]              |
+00411877 | 894D DC                  | mov dword ptr ss:[ebp-24],ecx           |
+0041187A | 8B40 04                  | mov eax,dword ptr ds:[eax+4]            |
+0041187D | FF75 EC                  | push dword ptr ss:[ebp-14]              |
+00411880 | 8D7D C4                  | lea edi,dword ptr ss:[ebp-3C]           |
+00411883 | 8D75 B4                  | lea esi,dword ptr ss:[ebp-4C]           |
+00411886 | 8945 E0                  | mov dword ptr ss:[ebp-20],eax           |
+00411889 | E8 42A80800              | call popcapgame1.49C0D0                 |
+0041188E | E9 2AFFFFFF              | jmp popcapgame1.4117BD                  |
+00411893 | 8D75 B4                  | lea esi,dword ptr ss:[ebp-4C]           |
+00411896 | E8 25230900              | call popcapgame1.4A3BC0                 |
+0041189B | E8 F4B70900              | call popcapgame1.4AD094                 |
+004118A0 | C2 0C00                  | ret C                                   |
+
+then breaks at 0049AB73:
+0049AB70 | 8B48 28                  | mov ecx,dword ptr ds:[eax+28]           |
+0049AB73 | 85C9                     | test ecx,ecx                            |
+0049AB75 | 7C 0C                    | jl popcapgame1.49AB83                   |
+0049AB77 | 56                       | push esi                                |
+0049AB78 | 51                       | push ecx                                |
+0049AB79 | 8D70 50                  | lea esi,dword ptr ds:[eax+50]           |
+0049AB7C | E8 4F90FEFF              | call popcapgame1.483BD0                 |
+0049AB81 | 5E                       | pop esi                                 |
+0049AB82 | C3                       | ret                                     |
+0049AB83 | 33C0                     | xor eax,eax                             |
+0049AB85 | C3                       | ret                                     |
+
+Then 0049AEA5 and then 0049AEAB:
+0049AE90 | 8B42 0C                  | mov eax,dword ptr ds:[edx+C]            |
+0049AE93 | 56                       | push esi                                |
+0049AE94 | 8BF0                     | mov esi,eax                             |
+0049AE96 | 57                       | push edi                                |
+0049AE97 | 8B7A 18                  | mov edi,dword ptr ds:[edx+18]           |
+0049AE9A | C1E6 05                  | shl esi,5                               |
+0049AE9D | 03F1                     | add esi,ecx                             |
+0049AE9F | 897E 44                  | mov dword ptr ds:[esi+44],edi           |
+0049AEA2 | 8B7A 28                  | mov edi,dword ptr ds:[edx+28]           |
+0049AEA5 | 897E 48                  | mov dword ptr ds:[esi+48],edi           |
+0049AEA8 | FF72 28                  | push dword ptr ds:[edx+28]              |
+0049AEAB | E8 20000000              | call popcapgame1.49AED0                 |
+0049AEB0 | 8B42 14                  | mov eax,dword ptr ds:[edx+14]           |
+0049AEB3 | 8946 4C                  | mov dword ptr ds:[esi+4C],eax           |
+0049AEB6 | 8B42 10                  | mov eax,dword ptr ds:[edx+10]           |
+0049AEB9 | 8946 50                  | mov dword ptr ds:[esi+50],eax           |
+0049AEBC | 8B42 2C                  | mov eax,dword ptr ds:[edx+2C]           |
+0049AEBF | 5F                       | pop edi                                 |
+0049AEC0 | 8946 54                  | mov dword ptr ds:[esi+54],eax           |
+0049AEC3 | 5E                       | pop esi                                 |
+0049AEC4 | C3                       | ret                                     |
+
+then 00478DAB again then 0040346C
+00403460 | 55                       | push ebp                                |
+00403461 | 8BEC                     | mov ebp,esp                             |
+00403463 | 51                       | push ecx                                |
+00403464 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+00403468 | 56                       | push esi                                |
+00403469 | FF70 28                  | push dword ptr ds:[eax+28]              |
+0040346C | 8D70 50                  | lea esi,dword ptr ds:[eax+50]           |
+0040346F | E8 5C070800              | call popcapgame1.483BD0                 |
+00403474 | 8B4D 08                  | mov ecx,dword ptr ss:[ebp+8]            |
+00403477 | 50                       | push eax                                |
+00403478 | E8 13D20400              | call popcapgame1.450690                 |
+0040347D | 8B45 08                  | mov eax,dword ptr ss:[ebp+8]            |
+00403480 | 5E                       | pop esi                                 |
+00403481 | C9                       | leave                                   |
+00403482 | C2 0400                  | ret 4                                   |
+
+then 00478E2A
+00478D90 | 6A 68                    | push 68                                 |
+00478D92 | B8 BE294D00              | mov eax,popcapgame1.4D29BE              | eax:"Succulent Starfish"
+00478D97 | E8 89420300              | call popcapgame1.4AD025                 |
+00478D9C | 8B45 10                  | mov eax,dword ptr ss:[ebp+10]           |
+00478D9F | 8B35 24C65A00            | mov esi,dword ptr ds:[5AC624]           |
+00478DA5 | 8B4E 3C                  | mov ecx,dword ptr ds:[esi+3C]           |
+00478DA8 | 8B51 28                  | mov edx,dword ptr ds:[ecx+28]           |
+00478DAB | 8B5D 08                  | mov ebx,dword ptr ss:[ebp+8]            |
+00478DAE | 8955 C4                  | mov dword ptr ss:[ebp-3C],edx           |
+00478DB1 | 8B96 B4000000            | mov edx,dword ptr ds:[esi+B4]           |
+00478DB7 | C1E0 05                  | shl eax,5                               | eax:"Succulent Starfish"
+00478DBA | 8B7C10 58                | mov edi,dword ptr ds:[eax+edx+58]       |
+00478DBE | 8D41 50                  | lea eax,dword ptr ds:[ecx+50]           | eax:"Succulent Starfish"
+00478DC1 | E8 DA020000              | call popcapgame1.4790A0                 |
+00478DC6 | 48                       | dec eax                                 | eax:"Succulent Starfish"
+00478DC7 | 3BC7                     | cmp eax,edi                             | eax:"Succulent Starfish"
+00478DC9 | 8945 C8                  | mov dword ptr ss:[ebp-38],eax           |
+00478DCC | 7C 03                    | jl popcapgame1.478DD1                   |
+00478DCE | 897D C8                  | mov dword ptr ss:[ebp-38],edi           |
+00478DD1 | 8B76 3C                  | mov esi,dword ptr ds:[esi+3C]           |
+00478DD4 | 8D45 8C                  | lea eax,dword ptr ss:[ebp-74]           |
+00478DD7 | 50                       | push eax                                | eax:"Succulent Starfish"
+00478DD8 | 8BC6                     | mov eax,esi                             | eax:"Succulent Starfish"
+00478DDA | E8 81A6F8FF              | call popcapgame1.403460                 |
+00478DDF | 33F6                     | xor esi,esi                             |
+00478DE1 | 8975 FC                  | mov dword ptr ss:[ebp-4],esi            |
+00478DE4 | 8B3D 24C65A00            | mov edi,dword ptr ds:[5AC624]           |
+00478DEA | 50                       | push eax                                | eax:"Succulent Starfish"
+00478DEB | E8 C032F9FF              | call popcapgame1.40C0B0                 |
+00478DF0 | 33FF                     | xor edi,edi                             |
+00478DF2 | 56                       | push esi                                |
+00478DF3 | 47                       | inc edi                                 |
+00478DF4 | 57                       | push edi                                |
+00478DF5 | 8D4D 8C                  | lea ecx,dword ptr ss:[ebp-74]           |
+00478DF8 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478DFB | E8 60FAFCFF              | call popcapgame1.448860                 |
+00478E00 | 8D45 D0                  | lea eax,dword ptr ss:[ebp-30]           |
+00478E03 | E8 B891FEFF              | call popcapgame1.461FC0                 |
+00478E08 | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478E0B | 3BC6                     | cmp eax,esi                             | eax:"Succulent Starfish"
+00478E0D | 897D FC                  | mov dword ptr ss:[ebp-4],edi            |
+00478E10 | 0F84 497C0700            | je popcapgame1.4F0A5F                   |
+00478E16 | 8D48 0C                  | lea ecx,dword ptr ds:[eax+C]            | eax+0C:"arfish"
+00478E19 | E8 F2A5F8FF              | call popcapgame1.403410                 |
+00478E1E | 8B0D 24C65A00            | mov ecx,dword ptr ds:[5AC624]           |
+00478E24 | 8B49 3C                  | mov ecx,dword ptr ds:[ecx+3C]           |
+00478E27 | 8B49 28                  | mov ecx,dword ptr ds:[ecx+28]           |
+00478E2A | 50                       | push eax                                | eax:"Succulent Starfish"
+00478E2B | 41                       | inc ecx                                 |
+00478E2C | 51                       | push ecx                                |
+00478E2D | 68 CC685500              | push popcapgame1.5568CC                 | 5568CC:"%d. %s"
+00478E32 | 8D75 D0                  | lea esi,dword ptr ss:[ebp-30]           |
+00478E35 | E8 462FFDFF              | call popcapgame1.44BD80                 |
+00478E3A | 83C4 0C                  | add esp,C                               |
+00478E3D | 33F6                     | xor esi,esi                             |
+00478E3F | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478E43 | 8B8B C8010000            | mov ecx,dword ptr ds:[ebx+1C8]          |
+00478E49 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00478E4B | 0F85 93010000            | jne popcapgame1.478FE4                  |
+00478E51 | 56                       | push esi                                |
+00478E52 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E58 | 8DB3 C4010000            | lea esi,dword ptr ds:[ebx+1C4]          |
+00478E5E | FF36                     | push dword ptr ds:[esi]                 |
+00478E60 | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478E63 | E8 8826FDFF              | call popcapgame1.44B4F0                 |
+00478E68 | 8B36                     | mov esi,dword ptr ds:[esi]              |
+00478E6A | 8B06                     | mov eax,dword ptr ds:[esi]              | eax:"Succulent Starfish"
+00478E6C | 57                       | push edi                                |
+00478E6D | 8BCE                     | mov ecx,esi                             |
+00478E6F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E75 | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          |
+00478E7B | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00478E7D | 33F6                     | xor esi,esi                             |
+00478E7F | 56                       | push esi                                |
+00478E80 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E86 | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          |
+00478E8C | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00478E8E | 57                       | push edi                                |
+00478E8F | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478E95 | 68 F0685500              | push popcapgame1.5568F0                 | 5568F0:"mapNowLoadingPrompt"
+00478E9A | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478E9D | E8 BE2FFDFF              | call popcapgame1.44BE60                 |
+00478EA2 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00478EA5 | 50                       | push eax                                | eax:"Succulent Starfish"
+00478EA6 | C645 FC 04               | mov byte ptr ss:[ebp-4],4               |
+00478EAA | E8 41170100              | call popcapgame1.48A5F0                 |
+00478EAF | 59                       | pop ecx                                 |
+00478EB0 | FFB3 BC010000            | push dword ptr ds:[ebx+1BC]             |
+00478EB6 | 8BC8                     | mov ecx,eax                             | eax:"Succulent Starfish"
+00478EB8 | E8 3326FDFF              | call popcapgame1.44B4F0                 |
+00478EBD | 56                       | push esi                                |
+00478EBE | 57                       | push edi                                |
+00478EBF | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478EC2 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00478EC6 | E8 95F9FCFF              | call popcapgame1.448860                 |
+00478ECB | 8DBB CC010000            | lea edi,dword ptr ds:[ebx+1CC]          |
+00478ED1 | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478ED3 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00478ED5 | 56                       | push esi                                |
+00478ED6 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478EDC | 8B0F                     | mov ecx,dword ptr ds:[edi]              |
+00478EDE | 6A 02                    | push 2                                  |
+00478EE0 | E8 BBEFF8FF              | call popcapgame1.407EA0                 |
+00478EE5 | 33F6                     | xor esi,esi                             |
+00478EE7 | 807D 0C 00               | cmp byte ptr ss:[ebp+C],0               |
+00478EEB | 0F85 9D000000            | jne popcapgame1.478F8E                  |
+00478EF1 | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          | eax:"Succulent Starfish"
+00478EF7 | 83C0 0C                  | add eax,C                               | eax:"Succulent Starfish"
+00478EFA | E8 A1010000              | call popcapgame1.4790A0                 |
+00478EFF | 3BF0                     | cmp esi,eax                             | eax:"Succulent Starfish"
+00478F01 | 73 36                    | jae popcapgame1.478F39                  |
+00478F03 | 3975 C4                  | cmp dword ptr ss:[ebp-3C],esi           |
+00478F06 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478F0C | 74 72                    | je popcapgame1.478F80                   |
+00478F0E | 33C0                     | xor eax,eax                             | eax:"Succulent Starfish"
+00478F10 | 3B75 C4                  | cmp esi,dword ptr ss:[ebp-3C]           |
+00478F13 | 0F9CC0                   | setl al                                 |
+00478F16 | 8945 CC                  | mov dword ptr ss:[ebp-34],eax           |
+00478F19 | 8BC7                     | mov eax,edi                             | eax:"Succulent Starfish"
+00478F1B | E8 B00DF9FF              | call popcapgame1.409CD0                 |
+00478F20 | 3BF0                     | cmp esi,eax                             | eax:"Succulent Starfish"
+00478F22 | 0F83 537B0700            | jae popcapgame1.4F0A7B                  |
+00478F28 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            |
+00478F2B | 8B45 CC                  | mov eax,dword ptr ss:[ebp-34]           |
+00478F2E | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478F31 | E8 3A34FFFF              | call popcapgame1.46C370                 |
+00478F36 | 46                       | inc esi                                 |
+00478F37 | EB B8                    | jmp popcapgame1.478EF1                  |
+00478F39 | 33C0                     | xor eax,eax                             | eax:"Succulent Starfish"
+00478F3B | 8945 B4                  | mov dword ptr ss:[ebp-4C],eax           |
+00478F3E | 8945 B8                  | mov dword ptr ss:[ebp-48],eax           |
+00478F41 | 8945 BC                  | mov dword ptr ss:[ebp-44],eax           |
+00478F44 | 81C3 D0010000            | add ebx,1D0                             |
+00478F4A | 8B03                     | mov eax,dword ptr ds:[ebx]              | eax:"Succulent Starfish"
+00478F4C | E8 2FCEFFFF              | call popcapgame1.475D80                 |
+00478F51 | 8945 C0                  | mov dword ptr ss:[ebp-40],eax           |
+00478F54 | 8B03                     | mov eax,dword ptr ds:[ebx]              | eax:"Succulent Starfish"
+00478F56 | C680 A8000000 01         | mov byte ptr ds:[eax+A8],1              | eax+A8:"ysteries"
+00478F5D | 8B3B                     | mov edi,dword ptr ds:[ebx]              |
+00478F5F | 81C7 98000000            | add edi,98                              |
+00478F65 | 8D75 B4                  | lea esi,dword ptr ss:[ebp-4C]           |
+00478F68 | A5                       | movsd                                   |
+00478F69 | A5                       | movsd                                   |
+00478F6A | A5                       | movsd                                   |
+00478F6B | 6A 00                    | push 0                                  |
+00478F6D | 6A 01                    | push 1                                  |
+00478F6F | 8D4D D0                  | lea ecx,dword ptr ss:[ebp-30]           |
+00478F72 | A5                       | movsd                                   |
+00478F73 | E8 E8F8FCFF              | call popcapgame1.448860                 |
+00478F78 | E8 2B410300              | call popcapgame1.4AD0A8                 |
+00478F7D | C2 0C00                  | ret C                                   |
+00478F80 | E8 1BDB0100              | call popcapgame1.496AA0                 |
+00478F85 | 8BC8                     | mov ecx,eax                             | eax:"Succulent Starfish"
+00478F87 | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478F89 | 6A 02                    | push 2                                  |
+00478F8B | 58                       | pop eax                                 | eax:"Succulent Starfish"
+00478F8C | EB A3                    | jmp popcapgame1.478F31                  |
+00478F8E | 8B83 A4010000            | mov eax,dword ptr ds:[ebx+1A4]          | eax:"Succulent Starfish"
+00478F94 | 83C0 0C                  | add eax,C                               | eax:"Succulent Starfish"
+00478F97 | E8 04010000              | call popcapgame1.4790A0                 |
+00478F9C | 3BF0                     | cmp esi,eax                             | eax:"Succulent Starfish"
+00478F9E | 73 99                    | jae popcapgame1.478F39                  |
+00478FA0 | 3B75 C8                  | cmp esi,dword ptr ss:[ebp-38]           |
+00478FA3 | 7F 2C                    | jg popcapgame1.478FD1                   |
+00478FA5 | 837D C8 00               | cmp dword ptr ss:[ebp-38],0             |
+00478FA9 | 7E 26                    | jle popcapgame1.478FD1                  |
+00478FAB | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FB1 | 8BC7                     | mov eax,edi                             | eax:"Succulent Starfish"
+00478FB3 | E8 180DF9FF              | call popcapgame1.409CD0                 |
+00478FB8 | 3BF0                     | cmp esi,eax                             | eax:"Succulent Starfish"
+00478FBA | 0F83 B17A0700            | jae popcapgame1.4F0A71                  |
+00478FC0 | 8B4F 04                  | mov ecx,dword ptr ds:[edi+4]            |
+00478FC3 | 8B0CB1                   | mov ecx,dword ptr ds:[ecx+esi*4]        |
+00478FC6 | 6A 03                    | push 3                                  |
+00478FC8 | 58                       | pop eax                                 | eax:"Succulent Starfish"
+00478FC9 | E8 A233FFFF              | call popcapgame1.46C370                 |
+00478FCE | 46                       | inc esi                                 |
+00478FCF | EB BD                    | jmp popcapgame1.478F8E                  |
+00478FD1 | 8DBB AC010000            | lea edi,dword ptr ds:[ebx+1AC]          |
+00478FD7 | E8 C4DA0100              | call popcapgame1.496AA0                 |
+00478FDC | 8BC8                     | mov ecx,eax                             | eax:"Succulent Starfish"
+00478FDE | 8B09                     | mov ecx,dword ptr ds:[ecx]              |
+00478FE0 | 33C0                     | xor eax,eax                             | eax:"Succulent Starfish"
+00478FE2 | EB E5                    | jmp popcapgame1.478FC9                  |
+00478FE4 | 57                       | push edi                                |
+00478FE5 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00478FEB | 68 0A055500              | push popcapgame1.55050A                 |
+00478FF0 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00478FF3 | E8 682EFDFF              | call popcapgame1.44BE60                 |
+00478FF8 | C645 FC 02               | mov byte ptr ss:[ebp-4],2               |
+00478FFC | FFB3 C8010000            | push dword ptr ds:[ebx+1C8]             |
+00479002 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479005 | E8 E624FDFF              | call popcapgame1.44B4F0                 |
+0047900A | 56                       | push esi                                |
+0047900B | 57                       | push edi                                |
+0047900C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047900F | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479013 | E8 48F8FCFF              | call popcapgame1.448860                 |
+00479018 | 8B8B C4010000            | mov ecx,dword ptr ds:[ebx+1C4]          |
+0047901E | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00479020 | 57                       | push edi                                |
+00479021 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+00479027 | 68 DC685500              | push popcapgame1.5568DC                 | 5568DC:"mapSelectInstruct"
+0047902C | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+0047902F | E8 2C2EFDFF              | call popcapgame1.44BE60                 |
+00479034 | 8D45 A8                  | lea eax,dword ptr ss:[ebp-58]           |
+00479037 | 50                       | push eax                                | eax:"Succulent Starfish"
+00479038 | C645 FC 03               | mov byte ptr ss:[ebp-4],3               |
+0047903C | E8 AF150100              | call popcapgame1.48A5F0                 |
+00479041 | 59                       | pop ecx                                 |
+00479042 | FFB3 C4010000            | push dword ptr ds:[ebx+1C4]             |
+00479048 | 8BC8                     | mov ecx,eax                             | eax:"Succulent Starfish"
+0047904A | E8 A124FDFF              | call popcapgame1.44B4F0                 |
+0047904F | 56                       | push esi                                |
+00479050 | 57                       | push edi                                |
+00479051 | 8D4D A8                  | lea ecx,dword ptr ss:[ebp-58]           |
+00479054 | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00479058 | E8 03F8FCFF              | call popcapgame1.448860                 |
+0047905D | 8B8B C0010000            | mov ecx,dword ptr ds:[ebx+1C0]          |
+00479063 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00479065 | 57                       | push edi                                |
+00479066 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047906C | 8B8B BC010000            | mov ecx,dword ptr ds:[ebx+1BC]          |
+00479072 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00479074 | 56                       | push esi                                |
+00479075 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047907B | 8DB3 CC010000            | lea esi,dword ptr ds:[ebx+1CC]          |
+00479081 | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+00479083 | 8B01                     | mov eax,dword ptr ds:[ecx]              | eax:"Succulent Starfish"
+00479085 | 57                       | push edi                                |
+00479086 | FF90 80000000            | call dword ptr ds:[eax+80]              |
+0047908C | 8B0E                     | mov ecx,dword ptr ds:[esi]              |
+0047908E | 6A 02                    | push 2                                  |
+00479090 | 58                       | pop eax                                 | eax:"Succulent Starfish"
+00479091 | E8 1AC9F8FF              | call popcapgame1.4059B0                 |
+00479096 | E9 4AFEFFFF              | jmp popcapgame1.478EE5                  |
+
+and then the level loading bar loads, and then it breaks at 0040C687 and 0040C70F
+0040C640 | 6A 78                    | push 78                                 |
+0040C642 | B8 55094D00              | mov eax,popcapgame1.4D0955              |
+0040C647 | E8 D9090A00              | call popcapgame1.4AD025                 |
+0040C64C | 8BF9                     | mov edi,ecx                             |
+0040C64E | 8D77 58                  | lea esi,dword ptr ds:[edi+58]           |
+0040C651 | 8BCE                     | mov ecx,esi                             |
+0040C653 | E8 586B0800              | call popcapgame1.4931B0                 |
+0040C658 | 84C0                     | test al,al                              |
+0040C65A | 0F84 EB000000            | je popcapgame1.40C74B                   |
+0040C660 | 68 DC945500              | push popcapgame1.5594DC                 | 5594DC:"stageTitle"
+0040C665 | 8D8D 7CFFFFFF            | lea ecx,dword ptr ss:[ebp-84]           |
+0040C66B | E8 F0F70300              | call popcapgame1.44BE60                 |
+0040C670 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+0040C674 | 8B36                     | mov esi,dword ptr ds:[esi]              |
+0040C676 | 8D85 7CFFFFFF            | lea eax,dword ptr ss:[ebp-84]           |
+0040C67C | 50                       | push eax                                |
+0040C67D | 8BC6                     | mov eax,esi                             |
+0040C67F | E8 CC170600              | call popcapgame1.46DE50                 |
+0040C684 | 834D FC FF               | or dword ptr ss:[ebp-4],FFFFFFFF        |
+0040C688 | 33DB                     | xor ebx,ebx                             |
+0040C68A | 6A 00                    | push 0                                  |
+0040C68C | 43                       | inc ebx                                 |
+0040C68D | 53                       | push ebx                                |
+0040C68E | 8D8D 7CFFFFFF            | lea ecx,dword ptr ss:[ebp-84]           |
+0040C694 | 8945 98                  | mov dword ptr ss:[ebp-68],eax           |
+0040C697 | E8 C4C10300              | call popcapgame1.448860                 |
+0040C69C | 837D 98 00               | cmp dword ptr ss:[ebp-68],0             |
+0040C6A0 | 0F84 A5000000            | je popcapgame1.40C74B                   |
+0040C6A6 | 8D45 D4                  | lea eax,dword ptr ss:[ebp-2C]           |
+0040C6A9 | E8 12590500              | call popcapgame1.461FC0                 |
+0040C6AE | 895D FC                  | mov dword ptr ss:[ebp-4],ebx            |
+0040C6B1 | 8B47 3C                  | mov eax,dword ptr ds:[edi+3C]           |
+0040C6B4 | FF70 28                  | push dword ptr ds:[eax+28]              |
+0040C6B7 | 83C0 50                  | add eax,50                              |
+0040C6BA | E8 51F70000              | call popcapgame1.41BE10                 |
+0040C6BF | 50                       | push eax                                |
+0040C6C0 | 8D4D 9C                  | lea ecx,dword ptr ss:[ebp-64]           | [ebp-64]:L"DS_OK"
+0040C6C3 | E8 C83F0400              | call popcapgame1.450690                 |
+0040C6C8 | 8D45 9C                  | lea eax,dword ptr ss:[ebp-64]           | [ebp-64]:L"DS_OK"
+0040C6CB | 50                       | push eax                                |
+0040C6CC | C645 FC 02               | mov byte ptr ss:[ebp-4],2               |
+0040C6D0 | E8 DBF9FFFF              | call popcapgame1.40C0B0                 |
+0040C6D5 | 85C0                     | test eax,eax                            |
+0040C6D7 | 0F84 9C270E00            | je popcapgame1.4EEE79                   |
+0040C6DD | 8D48 0C                  | lea ecx,dword ptr ds:[eax+C]            |
+0040C6E0 | E8 2B6DFFFF              | call popcapgame1.403410                 |
+0040C6E5 | 50                       | push eax                                |
+0040C6E6 | 68 E8945500              | push popcapgame1.5594E8                 | 5594E8:"%s"
+0040C6EB | 8D75 D4                  | lea esi,dword ptr ss:[ebp-2C]           |
+0040C6EE | E8 8DF60300              | call popcapgame1.44BD80                 |
+0040C6F3 | 59                       | pop ecx                                 |
+0040C6F4 | 59                       | pop ecx                                 |
+0040C6F5 | 8D45 B8                  | lea eax,dword ptr ss:[ebp-48]           | [ebp-48]:L"DS_OK"
+0040C6F8 | E8 C3580500              | call popcapgame1.461FC0                 |
+0040C6FD | 8BCE                     | mov ecx,esi                             |
+0040C6FF | C645 FC 03               | mov byte ptr ss:[ebp-4],3               |
+0040C703 | E8 086DFFFF              | call popcapgame1.403410                 |
+0040C708 | 50                       | push eax                                |
+0040C709 | 8B47 3C                  | mov eax,dword ptr ds:[edi+3C]           |
+0040C70C | 8B40 28                  | mov eax,dword ptr ds:[eax+28]           |
+0040C70F | 40                       | inc eax                                 |
+0040C710 | 50                       | push eax                                |
+0040C711 | 68 CC685500              | push popcapgame1.5568CC                 | 5568CC:"%d. %s"
+0040C716 | 8D75 B8                  | lea esi,dword ptr ss:[ebp-48]           | [ebp-48]:L"DS_OK"
+0040C719 | E8 62F60300              | call popcapgame1.44BD80                 |
+0040C71E | 83C4 0C                  | add esp,C                               |
+0040C721 | FF75 98                  | push dword ptr ss:[ebp-68]              |
+0040C724 | 8BCE                     | mov ecx,esi                             |
+0040C726 | E8 C5ED0300              | call popcapgame1.44B4F0                 |
+0040C72B | 33F6                     | xor esi,esi                             |
+0040C72D | 56                       | push esi                                |
+0040C72E | 53                       | push ebx                                |
+0040C72F | 8D4D B8                  | lea ecx,dword ptr ss:[ebp-48]           | [ebp-48]:L"DS_OK"
+0040C732 | E8 29C10300              | call popcapgame1.448860                 |
+0040C737 | 56                       | push esi                                |
+0040C738 | 53                       | push ebx                                |
+0040C739 | 8D4D 9C                  | lea ecx,dword ptr ss:[ebp-64]           | [ebp-64]:L"DS_OK"
+0040C73C | E8 1FC10300              | call popcapgame1.448860                 |
+0040C741 | 56                       | push esi                                |
+0040C742 | 53                       | push ebx                                |
+0040C743 | 8D4D D4                  | lea ecx,dword ptr ss:[ebp-2C]           |
+0040C746 | E8 15C10300              | call popcapgame1.448860                 |
+0040C74B | E8 58090A00              | call popcapgame1.4AD0A8                 |
+0040C750 | C3                       | ret                                     |
+
+And then 0040346C 3 times
+00403460 | 55                       | push ebp                                |
+00403461 | 8BEC                     | mov ebp,esp                             |
+00403463 | 51                       | push ecx                                |
+00403464 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+00403468 | 56                       | push esi                                |
+00403469 | FF70 28                  | push dword ptr ds:[eax+28]              |
+0040346C | 8D70 50                  | lea esi,dword ptr ds:[eax+50]           |
+0040346F | E8 5C070800              | call popcapgame1.483BD0                 |
+00403474 | 8B4D 08                  | mov ecx,dword ptr ss:[ebp+8]            |
+00403477 | 50                       | push eax                                |
+00403478 | E8 13D20400              | call popcapgame1.450690                 |
+0040347D | 8B45 08                  | mov eax,dword ptr ss:[ebp+8]            |
+00403480 | 5E                       | pop esi                                 |
+00403481 | C9                       | leave                                   |
+00403482 | C2 0400                  | ret 4                                   |
+
+the level is then loaded, with another break point when hitting continue on the level splash screen at 0040510F:
+004050D0 | 6A 2C                    | push 2C                                 |
+004050D2 | B8 84C24C00              | mov eax,popcapgame1.4CC284              |
+004050D7 | E8 497F0A00              | call popcapgame1.4AD025                 |
+004050DC | 33FF                     | xor edi,edi                             |
+004050DE | 897D FC                  | mov dword ptr ss:[ebp-4],edi            |
+004050E1 | 68 0A055500              | push popcapgame1.55050A                 |
+004050E6 | 8BF2                     | mov esi,edx                             |
+004050E8 | 894D D0                  | mov dword ptr ss:[ebp-30],ecx           |
+004050EB | 897D CC                  | mov dword ptr ss:[ebp-34],edi           |
+004050EE | E8 6D6D0400              | call popcapgame1.44BE60                 |
+004050F3 | 897D FC                  | mov dword ptr ss:[ebp-4],edi            |
+004050F6 | 33DB                     | xor ebx,ebx                             |
+004050F8 | 8D7E 3C                  | lea edi,dword ptr ds:[esi+3C]           |
+004050FB | 43                       | inc ebx                                 |
+004050FC | 8BCF                     | mov ecx,edi                             |
+004050FE | 895D CC                  | mov dword ptr ss:[ebp-34],ebx           |
+00405101 | E8 AAE00800              | call popcapgame1.4931B0                 |
+00405106 | 84C0                     | test al,al                              |
+00405108 | 74 5D                    | je popcapgame1.405167                   |
+0040510A | 8B07                     | mov eax,dword ptr ds:[edi]              |
+0040510C | 8B48 28                  | mov ecx,dword ptr ds:[eax+28]           |
+0040510F | 85C9                     | test ecx,ecx                            |
+00405111 | 894D C8                  | mov dword ptr ss:[ebp-38],ecx           |
+00405114 | 7C 51                    | jl popcapgame1.405167                   |
+00405116 | 51                       | push ecx                                |
+00405117 | 83C0 50                  | add eax,50                              |
+0040511A | E8 F16C0100              | call popcapgame1.41BE10                 |
+0040511F | 50                       | push eax                                |
+00405120 | 8D4D D4                  | lea ecx,dword ptr ss:[ebp-2C]           |
+00405123 | E8 68B50400              | call popcapgame1.450690                 |
+00405128 | 8D45 D4                  | lea eax,dword ptr ss:[ebp-2C]           |
+0040512B | 50                       | push eax                                |
+0040512C | 8BFE                     | mov edi,esi                             |
+0040512E | 895D FC                  | mov dword ptr ss:[ebp-4],ebx            |
+00405131 | E8 7A6F0000              | call popcapgame1.40C0B0                 |
+00405136 | 85C0                     | test eax,eax                            |
+00405138 | 0F84 F7510E00            | je popcapgame1.4EA335                   |
+0040513E | 8D48 0C                  | lea ecx,dword ptr ds:[eax+C]            |
+00405141 | E8 CAE2FFFF              | call popcapgame1.403410                 |
+00405146 | 8B75 D0                  | mov esi,dword ptr ss:[ebp-30]           |
+00405149 | 50                       | push eax                                |
+0040514A | 8B45 C8                  | mov eax,dword ptr ss:[ebp-38]           |
+0040514D | 40                       | inc eax                                 |
+0040514E | 50                       | push eax                                |
+0040514F | 68 CC685500              | push popcapgame1.5568CC                 | 5568CC:"%d. %s"
+00405154 | E8 276C0400              | call popcapgame1.44BD80                 |
+00405159 | 83C4 0C                  | add esp,C                               |
+0040515C | 6A 00                    | push 0                                  |
+0040515E | 53                       | push ebx                                |
+0040515F | 8D4D D4                  | lea ecx,dword ptr ss:[ebp-2C]           |
+00405162 | E8 F9360400              | call popcapgame1.448860                 |
+00405167 | 8B45 D0                  | mov eax,dword ptr ss:[ebp-30]           |
+0040516A | E8 397F0A00              | call popcapgame1.4AD0A8                 |
+0040516F | C3                       | ret                                     |
+00405170 | 6A 08                    | push 8                                  |
+00405172 | B8 027C4C00              | mov eax,popcapgame1.4C7C02              |
+00405177 | E8 737E0A00              | call popcapgame1.4ACFEF                 |
+0040517C | 8B75 0C                  | mov esi,dword ptr ss:[ebp+C]            |
+0040517F | 8BF9                     | mov edi,ecx                             |
+00405181 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+00405185 | 8975 EC                  | mov dword ptr ss:[ebp-14],esi           |
+00405188 | 3B7D 08                  | cmp edi,dword ptr ss:[ebp+8]            |
+0040518B | 74 20                    | je popcapgame1.4051AD                   |
+0040518D | 85F6                     | test esi,esi                            |
+0040518F | C645 FC 01               | mov byte ptr ss:[ebp-4],1               |
+00405193 | 74 09                    | je popcapgame1.40519E                   |
+00405195 | 8BC7                     | mov eax,edi                             |
+00405197 | 8BCE                     | mov ecx,esi                             |
+00405199 | E8 820D0000              | call popcapgame1.405F20                 |
+0040519E | 83C6 04                  | add esi,4                               |
+004051A1 | C645 FC 00               | mov byte ptr ss:[ebp-4],0               |
+004051A5 | 8975 0C                  | mov dword ptr ss:[ebp+C],esi            |
+004051A8 | 83C7 04                  | add edi,4                               |
+004051AB | EB DB                    | jmp popcapgame1.405188                  |
+004051AD | 8BC6                     | mov eax,esi                             |
+004051AF | E8 E07E0A00              | call popcapgame1.4AD094                 |
+004051B4 | C3                       | ret                                     |
+
+Upon finishing the level it broke at 0049AEA5 and 0049AEAB:
+0049AE90 | 8B42 0C                  | mov eax,dword ptr ds:[edx+C]            |
+0049AE93 | 56                       | push esi                                |
+0049AE94 | 8BF0                     | mov esi,eax                             |
+0049AE96 | 57                       | push edi                                |
+0049AE97 | 8B7A 18                  | mov edi,dword ptr ds:[edx+18]           |
+0049AE9A | C1E6 05                  | shl esi,5                               |
+0049AE9D | 03F1                     | add esi,ecx                             |
+0049AE9F | 897E 44                  | mov dword ptr ds:[esi+44],edi           |
+0049AEA2 | 8B7A 28                  | mov edi,dword ptr ds:[edx+28]           |
+0049AEA5 | 897E 48                  | mov dword ptr ds:[esi+48],edi           |
+0049AEA8 | FF72 28                  | push dword ptr ds:[edx+28]              |
+0049AEAB | E8 20000000              | call popcapgame1.49AED0                 |
+0049AEB0 | 8B42 14                  | mov eax,dword ptr ds:[edx+14]           |
+0049AEB3 | 8946 4C                  | mov dword ptr ds:[esi+4C],eax           |
+0049AEB6 | 8B42 10                  | mov eax,dword ptr ds:[edx+10]           |
+0049AEB9 | 8946 50                  | mov dword ptr ds:[esi+50],eax           |
+0049AEBC | 8B42 2C                  | mov eax,dword ptr ds:[edx+2C]           |
+0049AEBF | 5F                       | pop edi                                 |
+0049AEC0 | 8946 54                  | mov dword ptr ds:[esi+54],eax           |
+0049AEC3 | 5E                       | pop esi                                 |
+0049AEC4 | C3                       | ret                                     |
+
+then 0040346C then 0049AFB6 then 0049AFCD:
+0049AEF0 | 6A 1C                    | push 1C                                 |
+0049AEF2 | B8 8A124D00              | mov eax,popcapgame1.4D128A              |
+0049AEF7 | E8 C0200100              | call popcapgame1.4ACFBC                 |
+0049AEFC | 8BF9                     | mov edi,ecx                             |
+0049AEFE | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF01 | 8B88 B4000000            | mov ecx,dword ptr ds:[eax+B4]           |
+0049AF07 | 8B71 38                  | mov esi,dword ptr ds:[ecx+38]           |
+0049AF0A | C680 24030000 00         | mov byte ptr ds:[eax+324],0             |
+0049AF11 | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF14 | C680 23030000 00         | mov byte ptr ds:[eax+323],0             |
+0049AF1B | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF1E | 8B48 40                  | mov ecx,dword ptr ds:[eax+40]           |
+0049AF21 | 80B9 8C010000 00         | cmp byte ptr ds:[ecx+18C],0             |
+0049AF28 | 0F84 B5440500            | je popcapgame1.4EF3E3                   |
+0049AF2E | 8B80 A0000000            | mov eax,dword ptr ds:[eax+A0]           |
+0049AF34 | 8947 10                  | mov dword ptr ds:[edi+10],eax           |
+0049AF37 | A1 24C65A00              | mov eax,dword ptr ds:[5AC624]           |
+0049AF3C | 8B40 3C                  | mov eax,dword ptr ds:[eax+3C]           |
+0049AF3F | 8D4D D8                  | lea ecx,dword ptr ss:[ebp-28]           |
+0049AF42 | 51                       | push ecx                                |
+0049AF43 | E8 1885F6FF              | call popcapgame1.403460                 |
+0049AF48 | 8365 FC 00               | and dword ptr ss:[ebp-4],0              |
+0049AF4C | 8B4F 0C                  | mov ecx,dword ptr ds:[edi+C]            |
+0049AF4F | 8B51 40                  | mov edx,dword ptr ds:[ecx+40]           |
+0049AF52 | 8B4F 10                  | mov ecx,dword ptr ds:[edi+10]           |
+0049AF55 | 8B19                     | mov ebx,dword ptr ds:[ecx]              |
+0049AF57 | 56                       | push esi                                |
+0049AF58 | 52                       | push edx                                |
+0049AF59 | 50                       | push eax                                |
+0049AF5A | FF93 80010000            | call dword ptr ds:[ebx+180]             |
+0049AF60 | 834D FC FF               | or dword ptr ss:[ebp-4],FFFFFFFF        |
+0049AF64 | 6A 00                    | push 0                                  |
+0049AF66 | 6A 01                    | push 1                                  |
+0049AF68 | 8D4D D8                  | lea ecx,dword ptr ss:[ebp-28]           |
+0049AF6B | E8 F0D8FAFF              | call popcapgame1.448860                 |
+0049AF70 | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF73 | 8B4F 10                  | mov ecx,dword ptr ds:[edi+10]           |
+0049AF76 | 8BB0 B4000000            | mov esi,dword ptr ds:[eax+B4]           |
+0049AF7C | 8B01                     | mov eax,dword ptr ds:[ecx]              |
+0049AF7E | FF90 84010000            | call dword ptr ds:[eax+184]             |
+0049AF84 | 85C0                     | test eax,eax                            |
+0049AF86 | 7E 57                    | jle popcapgame1.49AFDF                  |
+0049AF88 | 8946 38                  | mov dword ptr ds:[esi+38],eax           |
+0049AF8B | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF8E | 8B88 B4000000            | mov ecx,dword ptr ds:[eax+B4]           |
+0049AF94 | E8 276AFEFF              | call popcapgame1.4819C0                 |
+0049AF99 | D9EE                     | fldz                                    |
+0049AF9B | 8B47 0C                  | mov eax,dword ptr ds:[edi+C]            |
+0049AF9E | 51                       | push ecx                                |
+0049AF9F | 8B4F 10                  | mov ecx,dword ptr ds:[edi+10]           |
+0049AFA2 | D91C24                   | fstp dword ptr ss:[esp]                 |
+0049AFA5 | FF70 24                  | push dword ptr ds:[eax+24]              |
+0049AFA8 | E8 03E9F6FF              | call popcapgame1.4098B0                 |
+0049AFAD | 8B77 0C                  | mov esi,dword ptr ds:[edi+C]            |
+0049AFB0 | 8B46 3C                  | mov eax,dword ptr ds:[esi+3C]           |
+0049AFB3 | 8B58 28                  | mov ebx,dword ptr ds:[eax+28]           |
+0049AFB6 | 83C0 50                  | add eax,50                              |
+0049AFB9 | 43                       | inc ebx                                 |
+0049AFBA | E8 E1E0FDFF              | call popcapgame1.4790A0                 |
+0049AFBF | 3BD8                     | cmp ebx,eax                             |
+0049AFC1 | 0F8D 27440500            | jge popcapgame1.4EF3EE                  |
+0049AFC7 | 8B46 3C                  | mov eax,dword ptr ds:[esi+3C]           |
+0049AFCA | 8958 28                  | mov dword ptr ds:[eax+28],ebx           |
+0049AFCD | 8B77 0C                  | mov esi,dword ptr ds:[edi+C]            |
+0049AFD0 | E8 FBB6FFFF              | call popcapgame1.4966D0                 |
+0049AFD5 | C647 14 00               | mov byte ptr ds:[edi+14],0              |
+0049AFD9 | E8 B6200100              | call popcapgame1.4AD094                 |
+0049AFDE | C3                       | ret                                     |
+0049AFDF | 33C0                     | xor eax,eax                             |
+0049AFE1 | EB A5                    | jmp popcapgame1.49AF88                  |
+
+
+then 0049AEA5 and 0049AEAB:
+0049AE90 | 8B42 0C                  | mov eax,dword ptr ds:[edx+C]            |
+0049AE93 | 56                       | push esi                                |
+0049AE94 | 8BF0                     | mov esi,eax                             |
+0049AE96 | 57                       | push edi                                |
+0049AE97 | 8B7A 18                  | mov edi,dword ptr ds:[edx+18]           |
+0049AE9A | C1E6 05                  | shl esi,5                               |
+0049AE9D | 03F1                     | add esi,ecx                             |
+0049AE9F | 897E 44                  | mov dword ptr ds:[esi+44],edi           |
+0049AEA2 | 8B7A 28                  | mov edi,dword ptr ds:[edx+28]           |
+0049AEA5 | 897E 48                  | mov dword ptr ds:[esi+48],edi           |
+0049AEA8 | FF72 28                  | push dword ptr ds:[edx+28]              |
+0049AEAB | E8 20000000              | call popcapgame1.49AED0                 |
+0049AEB0 | 8B42 14                  | mov eax,dword ptr ds:[edx+14]           |
+0049AEB3 | 8946 4C                  | mov dword ptr ds:[esi+4C],eax           |
+0049AEB6 | 8B42 10                  | mov eax,dword ptr ds:[edx+10]           |
+0049AEB9 | 8946 50                  | mov dword ptr ds:[esi+50],eax           |
+0049AEBC | 8B42 2C                  | mov eax,dword ptr ds:[edx+2C]           |
+0049AEBF | 5F                       | pop edi                                 |
+0049AEC0 | 8946 54                  | mov dword ptr ds:[esi+54],eax           |
+0049AEC3 | 5E                       | pop esi                                 |
+0049AEC4 | C3                       | ret                                     |
+
+then the continue screen loads, and on clicking continue it breaks at 0049AB73:
+0049AB70 | 8B48 28                  | mov ecx,dword ptr ds:[eax+28]           |
+0049AB73 | 85C9                     | test ecx,ecx                            |
+0049AB75 | 7C 0C                    | jl popcapgame1.49AB83                   |
+0049AB77 | 56                       | push esi                                |
+0049AB78 | 51                       | push ecx                                |
+0049AB79 | 8D70 50                  | lea esi,dword ptr ds:[eax+50]           |
+0049AB7C | E8 4F90FEFF              | call popcapgame1.483BD0                 |
+0049AB81 | 5E                       | pop esi                                 |
+0049AB82 | C3                       | ret                                     |
+0049AB83 | 33C0                     | xor eax,eax                             |
+0049AB85 | C3                       | ret                                     |
+
+then 0049AEA5, 0049AEAB, 00478DAB, 0040346C, 00478E2A, 0040C687, 0040C70F, 0040346C 3 times and then 0040510F and the next level is running properly

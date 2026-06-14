@@ -68,10 +68,12 @@ class FF2World(World):
     location_name_to_id: Dict[str, int] = location_name_to_id
 
     def generate_early(self) -> None:
-        # Slots 0 and 59 are fixed; shuffle content for slots 1-58.
-        indices = list(range(1, 59))
-        self.random.shuffle(indices)
-        self.level_shuffle: List[int] = [0] + indices + [59]
+        if self.options.level_shuffle:
+            indices = list(range(1, 59))
+            self.random.shuffle(indices)
+            self.level_shuffle: List[int] = [0] + indices + [59]
+        else:
+            self.level_shuffle: List[int] = list(range(60))
 
     def create_item(self, name: str) -> FF2Item:
         data = ITEM_TABLE[name]
@@ -147,8 +149,10 @@ class FF2World(World):
             lambda state: state.has("Victory", self.player)
 
     def fill_slot_data(self) -> Dict:
-        return {
+        data: Dict = {
             "death_link":      bool(self.options.death_link.value),
             "zone_boundaries": ZONE_BOUNDARIES,
-            "level_shuffle":   self.level_shuffle,
         }
+        if self.options.level_shuffle:
+            data["level_shuffle"] = self.level_shuffle
+        return data

@@ -57,13 +57,16 @@ FOCUS_PAUSE_ORIGINAL = bytes([0x0F, 0x95, 0xC0])
 FOCUS_PAUSE_NOP      = bytes([0xB0, 0x01, 0x90])
 BONUS_LEVELS    = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
 
-# level-shuffle hook offsets
-SHUFFLE_CLICK_OFFSET     = 0x11621
-SHUFFLE_CLICK_ORIGINAL   = bytes([0x8B, 0x49, 0x0C, 0xE8, 0x97, 0x6A, 0x08, 0x00])
-CONTENT_CLICK_TARGET     = 0x004980C0
-SHUFFLE_ADVANCE_OFFSET   = 0x9AFD0
-SHUFFLE_ADVANCE_ORIGINAL = bytes([0xE8, 0xFB, 0xB6, 0xFF, 0xFF])
-CONTENT_ADVANCE_TARGET   = 0x004966D0
+# level-shuffle hook — read-side remap (3 patch sites, never alters level_id writes)
+# Site 1: 0x49AB70 — mov ecx,[eax+28]; test ecx,ecx  (map-click level data getter)
+SHUFFLE_SITE1_OFFSET   = 0x9AB70
+SHUFFLE_SITE1_ORIGINAL = bytes([0x8B, 0x48, 0x28, 0x85, 0xC9])
+# Site 2: 0x40510A — mov eax,[edi]; mov ecx,[eax+28]  (continue-button level data getter)
+SHUFFLE_SITE2_OFFSET   = 0x510A
+SHUFFLE_SITE2_ORIGINAL = bytes([0x8B, 0x07, 0x8B, 0x48, 0x28])
+# Site 3: 0x403468 — push esi; push [eax+28]; lea esi,[eax+50]  (level data lookup helper)
+SHUFFLE_SITE3_OFFSET   = 0x3468
+SHUFFLE_SITE3_ORIGINAL = bytes([0x56, 0xFF, 0x70, 0x28, 0x8D, 0x70, 0x50])
 
 MEM_COMMIT             = 0x1000
 MEM_RESERVE            = 0x2000
@@ -257,121 +260,123 @@ def set_bp_on_thread(tid, address, dr_index=0, bp_type=0, bp_len=3):
         return ok
     return False
 
-def run_debug_capture(pm, target, dr_index, stop_event, on_hit):
+class DebugSession:
+    """Single persistent debugger attachment. Dispatches hardware BP events to registered callbacks.
+
+    DR index assignments:
+      DR0 — level object capture (one-shot), then reused for probe / watchlevelid
+      DR1 — player fish capture (persistent; re-fires on every level entry)
+      DR2 — max stage capture (one-shot)
+      DR3 — spare
+
+    Callbacks receive (ctx) and return True to keep the BP or False to remove it.
     """
-    Generic debug capture. Attaches debugger, sets breakpoint at target,
-    calls on_hit(ctx) when it fires. Returns first non-None result from on_hit.
-    """
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        err = ctypes.windll.kernel32.GetLastError()
-        print(f"  Failed to attach debugger. Error: {err}")
-        return None
 
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+    def __init__(self, pm):
+        self.pm    = pm
+        self._lock = threading.Lock()
+        self._bps  = {}   # dr_index -> (address, bp_type, bp_len, callback)
 
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, dr_index)
+    def start(self):
+        # WaitForDebugEvent is thread-affine: must be called from the same thread
+        # that called DebugActiveProcess. So we do both inside the loop thread and
+        # signal back when the attach succeeds (or fails).
+        ready = threading.Event()
+        err   = [None]
 
-    result      = None
-    debug_event = DEBUG_EVENT()
+        def _thread():
+            if not ctypes.windll.kernel32.DebugActiveProcess(self.pm.process_id):
+                err[0] = ctypes.windll.kernel32.GetLastError()
+                ready.set()
+                return
+            ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+            ready.set()
+            self._loop()
 
-    while result is None and (stop_event is None or not stop_event.is_set()):
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
+        threading.Thread(target=_thread, name="DebugSession", daemon=True).start()
+        ready.wait()
+        if err[0]:
+            raise RuntimeError(f"DebugActiveProcess failed: error {err[0]}")
 
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
+    def stop(self):
+        ctypes.windll.kernel32.DebugActiveProcessStop(self.pm.process_id)
 
-        if event_code == 2:
-            pass
+    def register(self, dr_index, address, callback, bp_type=0, bp_len=3):
+        with self._lock:
+            self._bps[dr_index] = (address, bp_type, bp_len, callback)
+        for tid in get_process_threads(self.pm.process_id):
+            set_bp_on_thread(tid, address, dr_index, bp_type, bp_len)
 
-        elif event_code == 1:
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
+    def unregister(self, dr_index):
+        with self._lock:
+            self._bps.pop(dr_index, None)
+        for tid in get_process_threads(self.pm.process_id):
+            th = get_thread_handle(tid)
+            if th:
+                clear_hardware_breakpoint(th, dr_index)
+                ctypes.windll.kernel32.CloseHandle(th)
 
-            if exc_addr == target and code not in (0x80000003,):
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx = CONTEXT()
-                            ctx.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx)) and ctx.Eip == target:
-                                result = on_hit(ctx)
-                                if result is not None:
-                                    clear_hardware_breakpoint(th, dr_index)
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
+    def _loop(self):
+        debug_event = DEBUG_EVENT()
+        while True:
+            if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
+                continue
+            event_code = debug_event.dwDebugEventCode
+            tid        = debug_event.dwThreadId
 
-        elif event_code == 3:
-            set_bp_on_thread(tid, target, dr_index)
+            if event_code == 1:   # EXCEPTION_DEBUG_EVENT
+                code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+                exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
 
-        ctypes.windll.kernel32.ContinueDebugEvent(
-            debug_event.dwProcessId, tid, DBG_CONTINUE
-        )
+                with self._lock:
+                    bps = dict(self._bps)
 
-        if result is not None:
-            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-            break
-
-    return result
-
-def _run_debug_loop(pm, target, dr_index, stop_event, on_hit, bp_type=0, bp_len=3, multi_hit=False):
-    """
-    General-purpose debug loop.
-    execute BP (bp_type=0): fires when EIP==target.
-    write BP   (bp_type=1): fires when target address is written; checks Dr6 bit.
-    multi_hit=False: stops after on_hit returns non-None (probe mode).
-    multi_hit=True : keeps going until stop_event (watch mode).
-    """
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        print(f"  [dbg] attach failed (error {ctypes.windll.kernel32.GetLastError()}) — another capture may still be running")
-        return None
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, dr_index, bp_type, bp_len)
-    result      = None
-    debug_event = DEBUG_EVENT()
-    while (multi_hit or result is None) and not stop_event.is_set():
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
-        if event_code == 1:
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            is_hw = (code == 0x80000004 or
-                     (bp_type == 0 and exc_addr == target and code not in (0x80000003,)))
-            if is_hw:
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx = CONTEXT()
-                            ctx.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx)):
-                                fired = (ctx.Eip == target) if bp_type == 0 else bool(ctx.Dr6 & (1 << dr_index))
-                                if fired:
-                                    ctx.Dr6 = 0
+                if bps:
+                    bp_addrs = {addr for addr, _, _, _ in bps.values()}
+                    is_hw = (code == 0x80000004 or
+                             (code not in (0x80000003,) and exc_addr in bp_addrs))
+                    if is_hw:
+                        th = get_thread_handle(tid)
+                        if th:
+                            if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
+                                try:
+                                    ctx = CONTEXT()
                                     ctx.ContextFlags = CONTEXT_CAPTURE
-                                    Wow64SetThreadContext(th, ctypes.byref(ctx))
-                                    ret = on_hit(ctx)
-                                    if not multi_hit and ret is not None:
-                                        result = ret
-                                        clear_hardware_breakpoint(th, dr_index)
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
-        elif event_code == 3:
-            set_bp_on_thread(tid, target, dr_index, bp_type, bp_len)
-        ctypes.windll.kernel32.ContinueDebugEvent(debug_event.dwProcessId, tid, DBG_CONTINUE)
-    ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-    return result
+                                    if Wow64GetThreadContext(th, ctypes.byref(ctx)):
+                                        to_remove = []
+                                        for dr_idx, (addr, bp_type, bp_len, cb) in bps.items():
+                                            if bp_type == 0:
+                                                fired = (ctx.Eip == addr)
+                                            else:
+                                                fired = bool(ctx.Dr6 & (1 << dr_idx))
+                                            if fired:
+                                                ctx.Dr6 = 0
+                                                ctx.ContextFlags = CONTEXT_CAPTURE
+                                                Wow64SetThreadContext(th, ctypes.byref(ctx))
+                                                keep = cb(ctx)
+                                                if not keep:
+                                                    to_remove.append(dr_idx)
+                                        for dr_idx in to_remove:
+                                            with self._lock:
+                                                self._bps.pop(dr_idx, None)
+                                            clear_hardware_breakpoint(th, dr_idx)
+                                finally:
+                                    ctypes.windll.kernel32.ResumeThread(th)
+                            ctypes.windll.kernel32.CloseHandle(th)
 
-def capture_level_object(pm, base):
+            elif event_code == 3:   # CREATE_THREAD_DEBUG_EVENT
+                with self._lock:
+                    bps = dict(self._bps)
+                for dr_idx, (addr, bp_type, bp_len, cb) in bps.items():
+                    set_bp_on_thread(tid, addr, dr_idx, bp_type, bp_len)
+
+            ctypes.windll.kernel32.ContinueDebugEvent(debug_event.dwProcessId, tid, DBG_CONTINUE)
+
+
+def capture_level_object(session, pm, base):
     target = base + LEVEL_STATE_OFFSET
-    print(f"Watching 0x{target:08X} — press Start Game to capture level object...")
+    done   = threading.Event()
+    result = [None]
 
     def on_hit(ctx):
         eax = ctx.Eax
@@ -382,23 +387,30 @@ def capture_level_object(pm, base):
             print(f"  stage    @ 0x{eax+OFFSET_STAGE:08X}")
             print(f"  level_id @ 0x{eax+OFFSET_LEVEL_ID:08X}")
             print(f"  progress @ 0x{eax+OFFSET_PROGRESS:08X}")
-            return eax
-        return None
+            result[0] = eax
+            done.set()
+            return False   # remove BP (DR0 freed for probe/watchlevelid)
+        return True
 
-    return run_debug_capture(pm, target, 0, None, on_hit)
+    print(f"Watching 0x{target:08X} — press Start Game to capture level object...")
+    session.register(0, target, on_hit)
+    done.wait()
+    return result[0]
 
-def capture_player_fish(pm, base, stop_event):
+
+def register_player_fish_bp(session, pm, base, player_info):
+    """Register a one-shot DR1 BP. Removes itself after the first valid capture.
+    Re-called by level_watcher after each level completion."""
     target = base + PLAYER_FISH_OFFSET
-    print(f"  [player] Watching 0x{target:08X} — enter a level to capture player fish...")
 
     def on_hit(ctx):
         ecx = ctx.Ecx
         if not ecx:
-            return None
+            return True
         try:
             sub_object = read_int(pm, ecx + OFFSET_SUB_OBJECT)
             if not sub_object:
-                return None
+                return True
             info = {
                 "player_fish": ecx,
                 "sub_object":  sub_object,
@@ -410,18 +422,22 @@ def capture_player_fish(pm, base, stop_event):
             print(f"  [player] Dash flag  @  0x{info['dash_addr']:08X}")
             print(f"  [player] Alive ptr  @  0x{info['alive_addr']:08X}")
             print("> ", end="", flush=True)
-            return info
+            player_info[0] = info
+            return False   # one-shot; level_watcher re-registers after level change
         except Exception:
-            return None
+            return True
 
-    return run_debug_capture(pm, target, 0, stop_event, on_hit)
+    print(f"  [player] Watching 0x{target:08X} — enter a level to capture player fish...")
+    session.register(1, target, on_hit)
 
-def capture_max_stage_object(pm, base, stop_event):
+
+def start_max_stage_capture(session, pm, base, max_stage_addr):
+    """Register a one-shot DR2 BP that captures mode0MaxStage address on first valid hit."""
     target = base + MAX_STAGE_OFFSET
     print(f"  [maxstage] Watching 0x{target:08X} — complete a level to capture max stage...")
 
     def on_hit(ctx):
-        ecx = ctx.Ecx
+        ecx       = ctx.Ecx
         candidate = ecx + OFFSET_MAX_STAGE
         try:
             value = read_int(pm, candidate)
@@ -429,15 +445,16 @@ def capture_max_stage_object(pm, base, stop_event):
                 print(f"\n  [maxstage] Captured ecx=0x{ecx:08X}")
                 print(f"  [maxstage] mode0MaxStage @ 0x{candidate:08X} = {value}")
                 print("> ", end="", flush=True)
-                return candidate
+                max_stage_addr[0] = candidate
+                return False   # remove BP
             else:
                 print(f"\n  [maxstage] Ignoring bad capture: value={value}")
                 print("> ", end="", flush=True)
+                return True
         except Exception:
-            pass
-        return None
+            return True
 
-    return run_debug_capture(pm, target, 0, stop_event, on_hit)
+    session.register(2, target, on_hit)
 
 def read_int(pm, address):
     buf = pm.read_bytes(address, 4)
@@ -589,7 +606,7 @@ def reset_to_boundary_level(pm, level_obj):
     write_int(pm, level_obj + OFFSET_PROGRESS, 0)
     print(f"\n  [watcher] Boundary reached — resetting to level {current_level} replay")
 
-def level_watcher(pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event):
+def level_watcher(session, pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event):
     completed_levels = set()
     completed_stages = set()
     last_level_id    = None
@@ -636,14 +653,9 @@ def level_watcher(pm, base, level_obj, max_stage_addr, fish_received, player_inf
                         completed_levels.add(completed_id)
                         print(f"\n  [watcher] Level {completed_id + 1} COMPLETE (new!)")
                     print("> ", end="", flush=True)
-                    # clear stale pointer, re-capture for new level
+                    # clear stale pointer and re-register one-shot BP for new level
                     player_info[0] = None
-                    print(f"  [watcher] Re-capturing player fish for level {current_level + 1}...")
-                    print("> ", end="", flush=True)
-                    threading.Thread(
-                        target=lambda: _recapture_player_fish(pm, base, player_info, stop_event),
-                        daemon=True,
-                    ).start()
+                    register_player_fish_bp(session, pm, base, player_info)
 
                 last_level_id = current_level
                 last_stage    = current_stage
@@ -663,13 +675,6 @@ def level_watcher(pm, base, level_obj, max_stage_addr, fish_received, player_inf
         except Exception:
             pass
         stop_event.wait(0.1)
-
-def _recapture_player_fish(pm, base, player_info, stop_event):
-    result = capture_player_fish(pm, base, stop_event)
-    if result:
-        player_info[0] = result
-        print(f"\n  [watcher] Re-captured player fish: 0x{result['player_fish']:08X}")
-        print("> ", end="", flush=True)
 
 def trigger_death(pm, player_fish, sub_object):
     """Call the player death function then trigger respawn loop."""
@@ -740,62 +745,138 @@ def generate_shuffle(seed=None):
     return [0] + indices + [59]
 
 
-def _build_shuffle_caves(table_addr, cave1_addr, cave2_addr):
-    # Cave 1: 32 bytes — map click path
-    # Entry: ecx = level_object
-    # Reads slot from [ecx+0xC], pass-through for 0/59, else looks up table[slot],
-    # puts content level in ecx, tail-calls CONTENT_CLICK_TARGET.
-    jmp_next = cave1_addr + 32
-    jmp_rel  = (CONTENT_CLICK_TARGET - jmp_next) & 0xFFFFFFFF
+def _build_shuffle_caves(table_addr):
+    """
+    Build the three read-side remap caves.
 
-    cave1 = bytearray([
-        0x50,                               # push eax
-        0x52,                               # push edx
-        0x8B, 0x41, 0x0C,                   # mov eax,[ecx+0xC]
-        0x85, 0xC0,                         # test eax,eax
-        0x74, 0x0E,                         # jz +0x0E  (→ offset 23)
-        0x83, 0xF8, 0x3B,                   # cmp eax,59
-        0x74, 0x09,                         # je +0x09  (→ offset 23)
-        0xBA,                               # mov edx,imm32
-        *table_addr.to_bytes(4, 'little'),  #   table_addr
-        0x0F, 0xB6, 0x04, 0x02,             # movzx eax,byte[edx+eax]
-        0x89, 0xC1,                         # mov ecx,eax  ← done (offset 23)
-        0x5A,                               # pop edx
-        0x58,                               # pop eax
-        0xE9,                               # jmp rel32
-        *jmp_rel.to_bytes(4, 'little'),     #   → CONTENT_CLICK_TARGET
+    Cave 1 (30 bytes) — patches 0x49AB70
+      Replaces: mov ecx,[eax+28]; test ecx,ecx  (5 bytes)
+      Entry: EAX=level_obj  Exit: ECX=shuffle[slot], flags set by test ecx,ecx
+      Returns to 0x49AB75 (jl 0x49AB83)
+
+    Cave 2 (30 bytes) — patches 0x40510A
+      Replaces: mov eax,[edi]; mov ecx,[eax+28]  (5 bytes)
+      Entry: EDI=&level_obj  Exit: EAX=level_obj, ECX=shuffle[slot]
+      Returns to 0x40510F (test ecx,ecx; jl ...)
+
+    Cave 3 (31 bytes) — patches 0x403468  (7-byte patch: call+nop+nop)
+      Replaces: push esi; push [eax+28]; lea esi,[eax+50]
+      Entry: EAX=level_obj  Sets up stack/ESI identically but pushes shuffle[slot]
+      Returns to 0x40346F (call 0x483BD0)
+    """
+    ta = table_addr.to_bytes(4, 'little')
+
+    # Cave 1 — 0x49AB70
+    # Byte layout (30 bytes):
+    #  0: 52          push edx
+    #  1: 8B 50 28    mov edx,[eax+28]
+    #  4: 8B CA       mov ecx,edx          (default passthrough)
+    #  6: 85 D2       test edx,edx
+    #  8: 78 10       js .done  (+16 → byte 26)
+    # 10: 83 FA 3B    cmp edx,59
+    # 13: 77 0B       ja .done  (+11 → byte 26)
+    # 15: 50          push eax
+    # 16: B8 xx xx xx xx  mov eax,table_addr
+    # 21: 0F B6 0C 10 movzx ecx,byte[eax+edx]
+    # 25: 58          pop eax
+    # 26: 5A          pop edx              (.done)
+    # 27: 85 C9       test ecx,ecx         (flags for jl at 49AB75)
+    # 29: C3          ret
+    cave1 = bytes([
+        0x52,
+        0x8B, 0x50, 0x28,
+        0x8B, 0xCA,
+        0x85, 0xD2,
+        0x78, 0x10,
+        0x83, 0xFA, 0x3B,
+        0x77, 0x0B,
+        0x50,
+        0xB8, *ta,
+        0x0F, 0xB6, 0x0C, 0x10,
+        0x58,
+        0x5A,
+        0x85, 0xC9,
+        0xC3,
     ])
-    assert len(cave1) == 32, len(cave1)
+    assert len(cave1) == 30, len(cave1)
 
-    # Cave 2: 25 bytes — auto-advance path
-    # Entry: eax = level_object, ebx = next slot (N+1)
-    # Temporarily writes table[N+1] to [eax+0x28], calls CONTENT_ADVANCE_TARGET,
-    # then restores slot N+1 to [eax+0x28].
-    call_next = cave2_addr + 20
-    call_rel  = (CONTENT_ADVANCE_TARGET - call_next) & 0xFFFFFFFF
-
-    cave2 = bytearray([
-        0x50,                               # push eax  (level_object)
-        0x52,                               # push edx
-        0xBA,                               # mov edx,imm32
-        *table_addr.to_bytes(4, 'little'),  #   table_addr
-        0x0F, 0xB6, 0x14, 0x1A,             # movzx edx,byte[edx+ebx]
-        0x89, 0x50, 0x28,                   # mov [eax+0x28],edx
-        0x5A,                               # pop edx
-        0xE8,                               # call rel32
-        *call_rel.to_bytes(4, 'little'),    #   → CONTENT_ADVANCE_TARGET
-        0x58,                               # pop eax  (level_object)
-        0x89, 0x58, 0x28,                   # mov [eax+0x28],ebx
-        0xC3,                               # ret
+    # Cave 2 — 0x40510A
+    # Byte layout (30 bytes):
+    #  0: 8B 07        mov eax,[edi]        (restore original 1st instr)
+    #  2: 52           push edx
+    #  3: 8B 50 28     mov edx,[eax+28]
+    #  6: 8B CA        mov ecx,edx          (default passthrough)
+    #  8: 85 D2        test edx,edx
+    # 10: 78 10        js .done  (+16 → byte 28)
+    # 12: 83 FA 3B     cmp edx,59
+    # 15: 77 0B        ja .done  (+11 → byte 28)
+    # 17: 50           push eax
+    # 18: B8 xx xx xx xx  mov eax,table_addr
+    # 23: 0F B6 0C 10  movzx ecx,byte[eax+edx]
+    # 27: 58           pop eax
+    # 28: 5A           pop edx              (.done)
+    # 29: C3           ret
+    # after ret: 0x40510F = test ecx,ecx; jl ...  (EAX still = level_obj)
+    cave2 = bytes([
+        0x8B, 0x07,
+        0x52,
+        0x8B, 0x50, 0x28,
+        0x8B, 0xCA,
+        0x85, 0xD2,
+        0x78, 0x10,
+        0x83, 0xFA, 0x3B,
+        0x77, 0x0B,
+        0x50,
+        0xB8, *ta,
+        0x0F, 0xB6, 0x0C, 0x10,
+        0x58,
+        0x5A,
+        0xC3,
     ])
-    assert len(cave2) == 25, len(cave2)
+    assert len(cave2) == 30, len(cave2)
 
-    return bytes(cave1), bytes(cave2)
+    # Cave 3 — 0x403468  (7-byte patch: E8 rel32 90 90)
+    # Byte layout (31 bytes):
+    #  0: 59           pop ecx              (save ret addr = 0x40346D)
+    #  1: 56           push esi             (save old ESI at EBP-8, as frame expects)
+    #  2: 8B 50 28     mov edx,[eax+28]     (slot)
+    #  5: 85 D2        test edx,edx
+    #  7: 78 10        js .pass  (+16 → byte 25)
+    #  9: 83 FA 3B     cmp edx,59
+    # 12: 77 0B        ja .pass  (+11 → byte 25)
+    # 14: 50           push eax
+    # 15: B8 xx xx xx xx  mov eax,table_addr
+    # 20: 0F B6 14 10  movzx edx,byte[eax+edx]
+    # 24: 58           pop eax
+    # 25: 52           push edx             (.pass — content_id arg at EBP-12)
+    # 26: 8D 70 50     lea esi,[eax+50]     (array ptr for 0x483BD0)
+    # 29: 51           push ecx             (re-push ret addr)
+    # 30: C3           ret                  (→ 0x40346D nop nop; then call 0x483BD0)
+    cave3 = bytes([
+        0x59,
+        0x56,
+        0x8B, 0x50, 0x28,
+        0x85, 0xD2,
+        0x78, 0x10,
+        0x83, 0xFA, 0x3B,
+        0x77, 0x0B,
+        0x50,
+        0xB8, *ta,
+        0x0F, 0xB6, 0x14, 0x10,
+        0x58,
+        0x52,
+        0x8D, 0x70, 0x50,
+        0x51,
+        0xC3,
+    ])
+    assert len(cave3) == 31, len(cave3)
+
+    return cave1, cave2, cave3
 
 
 def install_shuffle_hook(pm, base, shuffle):
-    """Allocate cave memory, write table+caves, patch both call sites. Returns cave base or None."""
-    TOTAL = 60 + 32 + 25  # 117 bytes
+    """Allocate cave memory, write table+caves, patch all three sites. Returns cave base or None."""
+    TOTAL = 60 + 30 + 30 + 31  # 151 bytes
 
     cave_mem = ctypes.windll.kernel32.VirtualAllocEx(
         pm.process_handle, None, TOTAL,
@@ -807,33 +888,41 @@ def install_shuffle_hook(pm, base, shuffle):
 
     table_addr = cave_mem
     cave1_addr = cave_mem + 60
-    cave2_addr = cave_mem + 60 + 32
+    cave2_addr = cave_mem + 60 + 30
+    cave3_addr = cave_mem + 60 + 30 + 30
 
     write_bytes(pm, table_addr, bytes(shuffle[:60]))
 
-    cave1, cave2 = _build_shuffle_caves(table_addr, cave1_addr, cave2_addr)
+    cave1, cave2, cave3 = _build_shuffle_caves(table_addr)
     write_bytes(pm, cave1_addr, cave1)
     write_bytes(pm, cave2_addr, cave2)
+    write_bytes(pm, cave3_addr, cave3)
 
-    # Patch click call site (8 bytes → 5-byte call + 3 NOPs)
-    site1 = base + SHUFFLE_CLICK_OFFSET
+    # Site 1: 0x49AB70 — 5 bytes → call cave1
+    site1 = base + SHUFFLE_SITE1_OFFSET
     rel1  = (cave1_addr - (site1 + 5)) & 0xFFFFFFFF
-    write_bytes(pm, site1, bytes([0xE8]) + rel1.to_bytes(4, 'little') + bytes([0x90, 0x90, 0x90]))
+    write_bytes(pm, site1, bytes([0xE8]) + rel1.to_bytes(4, 'little'))
 
-    # Patch advance call site (5 bytes → 5-byte call)
-    site2 = base + SHUFFLE_ADVANCE_OFFSET
+    # Site 2: 0x40510A — 5 bytes → call cave2
+    site2 = base + SHUFFLE_SITE2_OFFSET
     rel2  = (cave2_addr - (site2 + 5)) & 0xFFFFFFFF
     write_bytes(pm, site2, bytes([0xE8]) + rel2.to_bytes(4, 'little'))
 
-    print(f"  [shuffle] table=0x{table_addr:08X}  cave1=0x{cave1_addr:08X}  cave2=0x{cave2_addr:08X}")
-    print(f"  [shuffle] patched click@0x{site1:08X}  advance@0x{site2:08X}")
+    # Site 3: 0x403468 — 7 bytes → call cave3 + nop + nop
+    site3 = base + SHUFFLE_SITE3_OFFSET
+    rel3  = (cave3_addr - (site3 + 5)) & 0xFFFFFFFF
+    write_bytes(pm, site3, bytes([0xE8]) + rel3.to_bytes(4, 'little') + bytes([0x90, 0x90]))
+
+    print(f"  [shuffle] table=0x{table_addr:08X}  cave1=0x{cave1_addr:08X}  cave2=0x{cave2_addr:08X}  cave3=0x{cave3_addr:08X}")
+    print(f"  [shuffle] patched site1@0x{site1:08X}  site2@0x{site2:08X}  site3@0x{site3:08X}")
     return cave_mem
 
 
 def remove_shuffle_hook(pm, base, cave_mem):
-    """Restore original bytes at both call sites and free cave memory."""
-    write_bytes(pm, base + SHUFFLE_CLICK_OFFSET,   SHUFFLE_CLICK_ORIGINAL)
-    write_bytes(pm, base + SHUFFLE_ADVANCE_OFFSET, SHUFFLE_ADVANCE_ORIGINAL)
+    """Restore original bytes at all three sites and free cave memory."""
+    write_bytes(pm, base + SHUFFLE_SITE1_OFFSET, SHUFFLE_SITE1_ORIGINAL)
+    write_bytes(pm, base + SHUFFLE_SITE2_OFFSET, SHUFFLE_SITE2_ORIGINAL)
+    write_bytes(pm, base + SHUFFLE_SITE3_OFFSET, SHUFFLE_SITE3_ORIGINAL)
     ctypes.windll.kernel32.VirtualFreeEx(
         pm.process_handle, ctypes.c_void_p(cave_mem), 0, MEM_RELEASE,
     )
@@ -886,33 +975,25 @@ def main():
     patch_suck_block(pm, base)
     make_window_resizable()
 
-    level_obj = capture_level_object(pm, base)
+    session = DebugSession(pm)
+    session.start()
 
-    max_stage_addr = [None]
-    fish_received  = [0]
-    player_info    = [None]
+    level_obj = capture_level_object(session, pm, base)
+
+    max_stage_addr  = [None]
+    fish_received   = [0]
+    player_info     = [None]
     current_shuffle = [None]   # list[int] length 60: index=slot, value=content
     cave_mem_addr   = [None]   # base address of allocated cave block
     probe_stop      = [threading.Event()]
     probe_stop[0].set()  # initially "done"
 
-    def background_captures():
-        # sequential — player fish first, then max stage
-        result = capture_player_fish(pm, base, stop_event)
-        if result:
-            player_info[0] = result
-
-        if not stop_event.is_set():
-            result = capture_max_stage_object(pm, base, stop_event)
-            if result:
-                max_stage_addr[0] = result
-
-    bg_thread = threading.Thread(target=background_captures, daemon=True)
-    bg_thread.start()
+    register_player_fish_bp(session, pm, base, player_info)
+    start_max_stage_capture(session, pm, base, max_stage_addr)
 
     watcher_thread = threading.Thread(
         target=level_watcher,
-        args=(pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event),
+        args=(session, pm, base, level_obj, max_stage_addr, fish_received, player_info, stop_event),
         daemon=True
     )
     watcher_thread.start()
@@ -1126,71 +1207,67 @@ def main():
             except ValueError:
                 print("Usage: probe <hex_addr>")
                 continue
-            if bg_thread.is_alive():
-                print("  [probe] Background captures still running — complete a level first, or wait.")
-                continue
             probe_stop[0].set()
             probe_stop[0] = threading.Event()
-            ps  = probe_stop[0]
+            ps   = probe_stop[0]
             lobj = level_obj
+            session.unregister(0)   # free DR0 from any prior probe/watch
             print(f"  [probe] Waiting at 0x{probe_addr:08X} — trigger the action in-game now...")
-            def _do_probe(probe_addr=probe_addr, ps=ps, lobj=lobj):
-                def on_hit(ctx):
-                    print(f"\n  [probe] EIP=0x{ctx.Eip:08X}")
-                    print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}  EDX=0x{ctx.Edx:08X}")
-                    print(f"    ESI=0x{ctx.Esi:08X}  EDI=0x{ctx.Edi:08X}  EBP=0x{ctx.Ebp:08X}  ESP=0x{ctx.Esp:08X}")
-                    try:
-                        print(f"    [ESP] =0x{read_int(pm, ctx.Esp):08X}  (ret addr)")
-                    except Exception:
-                        pass
-                    for rn, rv in [("EAX", ctx.Eax), ("EBX", ctx.Ebx), ("ECX", ctx.Ecx)]:
-                        if 0x1000 < rv < 0x7FFFFFFF:
-                            try:
-                                v = read_int(pm, rv + OFFSET_LEVEL_ID)
-                                hint = " ← level_obj!" if rv == lobj else ""
-                                print(f"    [{rn}+0x28]=0x{v:08X} ({v}){hint}")
-                            except Exception:
-                                pass
-                    print("> ", end="", flush=True)
-                    return True
-                _run_debug_loop(pm, probe_addr, 0, ps, on_hit, bp_type=0)
-                print("\n  [probe] done")
+            def _probe_cb(ctx, probe_addr=probe_addr, ps=ps, lobj=lobj):
+                if ps.is_set():
+                    return False
+                print(f"\n  [probe] EIP=0x{ctx.Eip:08X}")
+                print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}  EDX=0x{ctx.Edx:08X}")
+                print(f"    ESI=0x{ctx.Esi:08X}  EDI=0x{ctx.Edi:08X}  EBP=0x{ctx.Ebp:08X}  ESP=0x{ctx.Esp:08X}")
+                try:
+                    print(f"    [ESP] =0x{read_int(pm, ctx.Esp):08X}  (ret addr)")
+                except Exception:
+                    pass
+                for rn, rv in [("EAX", ctx.Eax), ("EBX", ctx.Ebx), ("ECX", ctx.Ecx)]:
+                    if 0x1000 < rv < 0x7FFFFFFF:
+                        try:
+                            v = read_int(pm, rv + OFFSET_LEVEL_ID)
+                            hint = " ← level_obj!" if rv == lobj else ""
+                            print(f"    [{rn}+0x28]=0x{v:08X} ({v}){hint}")
+                        except Exception:
+                            pass
                 print("> ", end="", flush=True)
-            threading.Thread(target=_do_probe, daemon=True).start()
+                ps.set()
+                return False   # one-shot
+            session.register(0, probe_addr, _probe_cb)
 
         elif cmd == "watchlevelid":
             if level_obj is None:
                 print("  Level object not captured — start game first.")
                 continue
-            if bg_thread.is_alive():
-                print("  [watch] Background captures still running — complete a level first, or wait.")
-                continue
             n = int(parts[1]) if len(parts) > 1 else 8
             probe_stop[0].set()
             probe_stop[0] = threading.Event()
-            ps  = probe_stop[0]
+            ps = probe_stop[0]
+            session.unregister(0)   # free DR0 from any prior probe/watch
             watch_addr = level_obj + OFFSET_LEVEL_ID
-            hit_n = [0]
+            hit_n      = [0]
             print(f"  [watch] Write BP on level_id @ 0x{watch_addr:08X}, capturing {n} writes — trigger in-game...")
-            def _do_watch(watch_addr=watch_addr, n=n, ps=ps):
-                def on_hit(ctx):
-                    hit_n[0] += 1
-                    try:
-                        val = read_int(pm, watch_addr)
-                    except Exception:
-                        val = -1
-                    print(f"\n  [watch] write #{hit_n[0]:2d}: EIP=0x{ctx.Eip:08X}  level_id→{val}")
-                    print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}")
-                    print("> ", end="", flush=True)
-                    if hit_n[0] >= n:
-                        ps.set()
-                _run_debug_loop(pm, watch_addr, 0, ps, on_hit, bp_type=1, bp_len=3, multi_hit=True)
-                print(f"\n  [watch] done ({hit_n[0]} writes captured)")
+            def _watch_cb(ctx, watch_addr=watch_addr, n=n, ps=ps):
+                if ps.is_set():
+                    return False
+                hit_n[0] += 1
+                try:
+                    val = read_int(pm, watch_addr)
+                except Exception:
+                    val = -1
+                print(f"\n  [watch] write #{hit_n[0]:2d}: EIP=0x{ctx.Eip:08X}  level_id→{val}")
+                print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}")
                 print("> ", end="", flush=True)
-            threading.Thread(target=_do_watch, daemon=True).start()
+                if hit_n[0] >= n:
+                    ps.set()
+                    return False
+                return True
+            session.register(0, watch_addr, _watch_cb, bp_type=1, bp_len=3)
 
         elif cmd == "stopwatch":
             probe_stop[0].set()
+            session.unregister(0)
             print("  [probe/watch] cancelled")
 
         elif cmd == "showshuffle":
@@ -1212,6 +1289,7 @@ def main():
         
 
     stop_event.set()
+    session.stop()
     watcher_thread.join(timeout=1)
 
 if __name__ == "__main__":

@@ -74,16 +74,16 @@ SUCK_CALL_OFFSET = 0x24A31
 SUCK_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
 SUCK_UNBLOCKED   = bytes([0xE8, 0xAA, 0x98, 0x06, 0x00])        # call 0x48E2E0
 
-# ── Level shuffle hook ────────────────────────────────────────────────────────
-# Path 1 (map click): 8 bytes at 0x411621 — mov ecx,[ecx+0xC] + call 0x4980C0
-SHUFFLE_CLICK_OFFSET    = 0x11621
-SHUFFLE_CLICK_ORIGINAL  = bytes([0x8B, 0x49, 0x0C, 0xE8, 0x97, 0x6A, 0x08, 0x00])
-CONTENT_CLICK_TARGET    = 0x004980C0
-
-# Path 2 (auto-advance): 5 bytes at 0x49AFD0 — call 0x4966D0
-SHUFFLE_ADVANCE_OFFSET   = 0x9AFD0
-SHUFFLE_ADVANCE_ORIGINAL = bytes([0xE8, 0xFB, 0xB6, 0xFF, 0xFF])
-CONTENT_ADVANCE_TARGET   = 0x004966D0
+# ── Level shuffle hook — read-side remap (3 patch sites) ─────────────────────
+# Site 1: 0x49AB70 — mov ecx,[eax+28]; test ecx,ecx  (map-click level data getter)
+SHUFFLE_SITE1_OFFSET   = 0x9AB70
+SHUFFLE_SITE1_ORIGINAL = bytes([0x8B, 0x48, 0x28, 0x85, 0xC9])
+# Site 2: 0x40510A — mov eax,[edi]; mov ecx,[eax+28]  (continue-button level data getter)
+SHUFFLE_SITE2_OFFSET   = 0x510A
+SHUFFLE_SITE2_ORIGINAL = bytes([0x8B, 0x07, 0x8B, 0x48, 0x28])
+# Site 3: 0x403468 — push esi; push [eax+28]; lea esi,[eax+50]  (level data lookup helper)
+SHUFFLE_SITE3_OFFSET   = 0x3468
+SHUFFLE_SITE3_ORIGINAL = bytes([0x56, 0xFF, 0x70, 0x28, 0x8D, 0x70, 0x50])
 
 # ── Windows debug API setup ───────────────────────────────────────────────────
 DBG_CONTINUE      = 0x00010002
@@ -835,8 +835,9 @@ class FF2Context(CommonContext):
         MEM_RESERVE            = 0x2000
         PAGE_EXECUTE_READWRITE = 0x40
 
+        TOTAL = 60 + 30 + 30 + 31  # table + cave1 + cave2 + cave3
         block = ctypes.windll.kernel32.VirtualAllocEx(
-            pm.process_handle, None, 60 + 32 + 25,
+            pm.process_handle, None, TOTAL,
             MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
         )
         if not block:
@@ -845,7 +846,8 @@ class FF2Context(CommonContext):
 
         table_addr = block
         cave1_addr = block + 60
-        cave2_addr = block + 60 + 32
+        cave2_addr = block + 60 + 30
+        cave3_addr = block + 60 + 30 + 30
 
         written = ctypes.c_size_t(0)
         ctypes.windll.kernel32.WriteProcessMemory(
@@ -853,7 +855,7 @@ class FF2Context(CommonContext):
             bytes(shuffle[:60]), 60, ctypes.byref(written),
         )
 
-        cave1, cave2 = _build_shuffle_caves(table_addr, cave1_addr, cave2_addr)
+        cave1, cave2, cave3 = _build_shuffle_caves(table_addr)
         ctypes.windll.kernel32.WriteProcessMemory(
             pm.process_handle, ctypes.c_void_p(cave1_addr),
             cave1, len(cave1), ctypes.byref(written),
@@ -862,17 +864,28 @@ class FF2Context(CommonContext):
             pm.process_handle, ctypes.c_void_p(cave2_addr),
             cave2, len(cave2), ctypes.byref(written),
         )
+        ctypes.windll.kernel32.WriteProcessMemory(
+            pm.process_handle, ctypes.c_void_p(cave3_addr),
+            cave3, len(cave3), ctypes.byref(written),
+        )
 
-        site1 = base + SHUFFLE_CLICK_OFFSET
+        # Site 1: 0x49AB70 — 5 bytes → call cave1
+        site1 = base + SHUFFLE_SITE1_OFFSET
         rel1  = (cave1_addr - (site1 + 5)) & 0xFFFFFFFF
-        write_bytes(pm, site1, b'\xE8' + struct.pack('<I', rel1) + b'\x90\x90\x90')
+        write_bytes(pm, site1, b'\xE8' + struct.pack('<I', rel1))
 
-        site2 = base + SHUFFLE_ADVANCE_OFFSET
+        # Site 2: 0x40510A — 5 bytes → call cave2
+        site2 = base + SHUFFLE_SITE2_OFFSET
         rel2  = (cave2_addr - (site2 + 5)) & 0xFFFFFFFF
         write_bytes(pm, site2, b'\xE8' + struct.pack('<I', rel2))
 
+        # Site 3: 0x403468 — 7 bytes → call cave3 + nop + nop
+        site3 = base + SHUFFLE_SITE3_OFFSET
+        rel3  = (cave3_addr - (site3 + 5)) & 0xFFFFFFFF
+        write_bytes(pm, site3, b'\xE8' + struct.pack('<I', rel3) + b'\x90\x90')
+
         self._shuffle_cave_addr = block
-        logger.info(f"[FF2] Shuffle hook installed (block: 0x{block:08X})")
+        logger.info(f"[FF2] Shuffle hook installed (block: 0x{block:08X}  sites: 0x{site1:08X} 0x{site2:08X} 0x{site3:08X})")
         return True
 
     def _remove_shuffle_hook(self) -> None:
@@ -881,11 +894,15 @@ class FF2Context(CommonContext):
             return
         if self.pm and self.base:
             try:
-                write_bytes(self.pm, self.base + SHUFFLE_CLICK_OFFSET,   SHUFFLE_CLICK_ORIGINAL)
+                write_bytes(self.pm, self.base + SHUFFLE_SITE1_OFFSET, SHUFFLE_SITE1_ORIGINAL)
             except Exception:
                 pass
             try:
-                write_bytes(self.pm, self.base + SHUFFLE_ADVANCE_OFFSET, SHUFFLE_ADVANCE_ORIGINAL)
+                write_bytes(self.pm, self.base + SHUFFLE_SITE2_OFFSET, SHUFFLE_SITE2_ORIGINAL)
+            except Exception:
+                pass
+            try:
+                write_bytes(self.pm, self.base + SHUFFLE_SITE3_OFFSET, SHUFFLE_SITE3_ORIGINAL)
             except Exception:
                 pass
         try:
@@ -987,56 +1004,91 @@ class FF2Context(CommonContext):
 
 # ── Shuffle cave builder ──────────────────────────────────────────────────────
 
-def _build_shuffle_caves(table_addr: int, cave1_addr: int, cave2_addr: int):
+def _build_shuffle_caves(table_addr: int):
     """
-    Build x86 machine code for the two level-shuffle intercept caves.
+    Build x86 machine code for the three read-side remap caves.
+    Never alters level_obj+0x28 — only remaps at read time.
 
-    Cave 1 (map click, 32 bytes):
-      Reads slot N from [ecx+0xC], looks up content M = table[N],
-      puts M in ecx, then tail-calls 0x4980C0 (content loader).
-      Slots 0 and 59 pass through unchanged.
+    Cave 1 (30 bytes) — patches 0x49AB70
+      Replaces: mov ecx,[eax+28]; test ecx,ecx  (5 bytes)
+      Entry: EAX=level_obj  Exit: ECX=shuffle[slot], flags set by test ecx,ecx
+      Returns to 0x49AB75 (jl 0x49AB83)
 
-    Cave 2 (auto-advance, 25 bytes):
-      Saves level_object (eax) and slot N+1 (ebx), writes content M
-      to [level_obj+0x28] so 0x4966D0 loads the right content,
-      calls 0x4966D0, then restores slot N+1 to [level_obj+0x28].
+    Cave 2 (30 bytes) — patches 0x40510A
+      Replaces: mov eax,[edi]; mov ecx,[eax+28]  (5 bytes)
+      Entry: EDI=&level_obj  Exit: EAX=level_obj, ECX=shuffle[slot]
+      Returns to 0x40510F (test ecx,ecx; jl ...)
+
+    Cave 3 (31 bytes) — patches 0x403468  (7-byte patch: call+nop+nop)
+      Replaces: push esi; push [eax+28]; lea esi,[eax+50]
+      Entry: EAX=level_obj  Sets up stack/ESI identically but pushes shuffle[slot]
+      Returns to 0x40346F (call 0x483BD0)
     """
-    # ── Cave 1 ────────────────────────────────────────────────────────────────
-    c1 = bytearray()
-    c1 += b'\x50'                                    # push eax
-    c1 += b'\x52'                                    # push edx
-    c1 += b'\x8B\x41\x0C'                           # mov eax,[ecx+0xC]  (slot N)
-    c1 += b'\x85\xC0'                               # test eax,eax
-    c1 += b'\x74\x0E'                               # jz done  (slot 0 → pass through)
-    c1 += b'\x83\xF8\x3B'                           # cmp eax,59
-    c1 += b'\x74\x09'                               # je done  (slot 59 → pass through)
-    c1 += b'\xBA' + struct.pack('<I', table_addr)   # mov edx,table_addr
-    c1 += b'\x0F\xB6\x04\x02'                       # movzx eax,byte[edx+eax]
-    # done (offset 23):
-    c1 += b'\x89\xC1'                               # mov ecx,eax
-    c1 += b'\x5A'                                   # pop edx
-    c1 += b'\x58'                                   # pop eax
-    rel1 = (CONTENT_CLICK_TARGET - (cave1_addr + len(c1) + 5)) & 0xFFFFFFFF
-    c1 += b'\xE9' + struct.pack('<I', rel1)         # jmp 0x4980C0
-    assert len(c1) == 32, f"Cave 1 size mismatch: {len(c1)}"
+    ta = struct.pack('<I', table_addr)
 
-    # ── Cave 2 ────────────────────────────────────────────────────────────────
-    # Entry: eax = level_object, ebx = next slot N+1, [esp+0] = ret addr
-    c2 = bytearray()
-    c2 += b'\x50'                                   # push eax  (level_object)
-    c2 += b'\x52'                                   # push edx
-    c2 += b'\xBA' + struct.pack('<I', table_addr)  # mov edx,table_addr
-    c2 += b'\x0F\xB6\x14\x1A'                      # movzx edx,byte[edx+ebx]  (content M)
-    c2 += b'\x89\x50\x28'                          # mov [eax+0x28],edx  (write content)
-    c2 += b'\x5A'                                  # pop edx
-    rel2 = (CONTENT_ADVANCE_TARGET - (cave2_addr + len(c2) + 5)) & 0xFFFFFFFF
-    c2 += b'\xE8' + struct.pack('<I', rel2)        # call 0x4966D0
-    c2 += b'\x58'                                  # pop eax  (level_object)
-    c2 += b'\x89\x58\x28'                         # mov [eax+0x28],ebx  (restore slot)
-    c2 += b'\xC3'                                  # ret
-    assert len(c2) == 25, f"Cave 2 size mismatch: {len(c2)}"
+    # Cave 1 — 0x49AB70 (30 bytes)
+    cave1 = (
+        b'\x52'             # push edx
+        b'\x8B\x50\x28'    # mov edx,[eax+28]
+        b'\x8B\xCA'        # mov ecx,edx          (default passthrough)
+        b'\x85\xD2'        # test edx,edx
+        b'\x78\x10'        # js .done  (+16 → byte 26)
+        b'\x83\xFA\x3B'    # cmp edx,59
+        b'\x77\x0B'        # ja .done  (+11 → byte 26)
+        b'\x50'            # push eax
+        b'\xB8' + ta +     # mov eax,table_addr
+        b'\x0F\xB6\x0C\x10'  # movzx ecx,byte[eax+edx]
+        b'\x58'            # pop eax
+        b'\x5A'            # pop edx              (.done)
+        b'\x85\xC9'        # test ecx,ecx         (flags for jl at 49AB75)
+        b'\xC3'            # ret
+    )
+    assert len(cave1) == 30, f"cave1 size {len(cave1)}"
 
-    return bytes(c1), bytes(c2)
+    # Cave 2 — 0x40510A (30 bytes)
+    # after ret: 0x40510F = test ecx,ecx; jl ...  (EAX still = level_obj)
+    cave2 = (
+        b'\x8B\x07'        # mov eax,[edi]         (restore original 1st instr)
+        b'\x52'            # push edx
+        b'\x8B\x50\x28'   # mov edx,[eax+28]
+        b'\x8B\xCA'       # mov ecx,edx           (default passthrough)
+        b'\x85\xD2'       # test edx,edx
+        b'\x78\x10'       # js .done  (+16 → byte 28)
+        b'\x83\xFA\x3B'   # cmp edx,59
+        b'\x77\x0B'       # ja .done  (+11 → byte 28)
+        b'\x50'           # push eax
+        b'\xB8' + ta +    # mov eax,table_addr
+        b'\x0F\xB6\x0C\x10'  # movzx ecx,byte[eax+edx]
+        b'\x58'           # pop eax
+        b'\x5A'           # pop edx               (.done)
+        b'\xC3'           # ret
+    )
+    assert len(cave2) == 30, f"cave2 size {len(cave2)}"
+
+    # Cave 3 — 0x403468 (31 bytes), 7-byte patch (call cave3 + nop + nop)
+    # Stack on entry: [ESP]=ret_addr(0x40346D), EAX=level_obj
+    # Stack on exit:  [ESP]=ret_addr, [ESP+4]=content_id, [ESP+8]=old_esi
+    # ESI = level_obj+0x50; returns to nop nop; call 0x483BD0 at 0x40346F
+    cave3 = (
+        b'\x59'            # pop ecx               (save ret addr = 0x40346D)
+        b'\x56'            # push esi              (old ESI at EBP-8, frame expects it here)
+        b'\x8B\x50\x28'   # mov edx,[eax+28]      (slot)
+        b'\x85\xD2'       # test edx,edx
+        b'\x78\x10'       # js .pass  (+16 → byte 25)
+        b'\x83\xFA\x3B'   # cmp edx,59
+        b'\x77\x0B'       # ja .pass  (+11 → byte 25)
+        b'\x50'           # push eax
+        b'\xB8' + ta +    # mov eax,table_addr
+        b'\x0F\xB6\x14\x10'  # movzx edx,byte[eax+edx]
+        b'\x58'           # pop eax
+        b'\x52'           # push edx              (.pass — content_id arg at EBP-12)
+        b'\x8D\x70\x50'   # lea esi,[eax+50]      (array ptr for 0x483BD0)
+        b'\x51'           # push ecx              (re-push ret addr)
+        b'\xC3'           # ret
+    )
+    assert len(cave3) == 31, f"cave3 size {len(cave3)}"
+
+    return cave1, cave2, cave3
 
 
 # ── Deathlink routine ───────────────────────────────────────────────────────────────

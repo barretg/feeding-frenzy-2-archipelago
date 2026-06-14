@@ -7,6 +7,13 @@ class DeathLink(Toggle):
     display_name = "Death Link"
 
 
+class LevelShuffle(Toggle):
+    """Randomize which level content appears at each map slot.
+    Bonus levels (which have only a completion check) may appear at any position."""
+    display_name = "Level Shuffle"
+
+
 @dataclass
 class FF2Options(PerGameCommonOptions):
-    death_link: DeathLink
+    death_link:    DeathLink
+    level_shuffle: LevelShuffle
