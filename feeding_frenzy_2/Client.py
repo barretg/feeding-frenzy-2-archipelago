@@ -6,10 +6,11 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import ctypes.wintypes as wintypes
+import struct
 import sys
 import threading
 import time
-from typing import Optional
+from typing import List, Optional
 
 import pymem
 import pymem.process
@@ -72,6 +73,17 @@ DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])        # call 0x4204A0
 SUCK_CALL_OFFSET = 0x24A31
 SUCK_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
 SUCK_UNBLOCKED   = bytes([0xE8, 0xAA, 0x98, 0x06, 0x00])        # call 0x48E2E0
+
+# ── Level shuffle hook ────────────────────────────────────────────────────────
+# Path 1 (map click): 8 bytes at 0x411621 — mov ecx,[ecx+0xC] + call 0x4980C0
+SHUFFLE_CLICK_OFFSET    = 0x11621
+SHUFFLE_CLICK_ORIGINAL  = bytes([0x8B, 0x49, 0x0C, 0xE8, 0x97, 0x6A, 0x08, 0x00])
+CONTENT_CLICK_TARGET    = 0x004980C0
+
+# Path 2 (auto-advance): 5 bytes at 0x49AFD0 — call 0x4966D0
+SHUFFLE_ADVANCE_OFFSET   = 0x9AFD0
+SHUFFLE_ADVANCE_ORIGINAL = bytes([0xE8, 0xFB, 0xB6, 0xFF, 0xFF])
+CONTENT_ADVANCE_TARGET   = 0x004966D0
 
 # ── Windows debug API setup ───────────────────────────────────────────────────
 DBG_CONTINUE      = 0x00010002
@@ -717,6 +729,10 @@ class FF2Context(CommonContext):
         self.dash_received:  bool          = False
         self.suck_received:  bool          = False
 
+        # shuffle state (persists across game restarts — same seed = same shuffle)
+        self.level_shuffle:      Optional[List[int]] = None
+        self._shuffle_cave_addr: Optional[int]       = None
+
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
             await super().server_auth(password_requested)
@@ -729,6 +745,11 @@ class FF2Context(CommonContext):
             self._death_link_enabled = bool(slot_data.get("death_link", False))
             if self._death_link_enabled:
                 Utils.async_start(self.update_death_link(True))
+            shuffle = slot_data.get("level_shuffle")
+            if shuffle:
+                self.level_shuffle = shuffle
+                if self.game_ready and self.base and self.pm:
+                    self._install_shuffle_hook(shuffle)
             logger.info(f"[FF2] Connected. DeathLink: {self._death_link_enabled}")
 
         elif cmd == "ReceivedItems":
@@ -798,6 +819,84 @@ class FF2Context(CommonContext):
         except Exception as e:
             logger.error(f"[FF2] Failed to unblock suck: {e}")
 
+    def _content_level(self, slot: int) -> int:
+        """Map a map-slot level ID to the content level ID for that slot."""
+        if self.level_shuffle and 0 <= slot < len(self.level_shuffle):
+            return self.level_shuffle[slot]
+        return slot
+
+    def _install_shuffle_hook(self, shuffle: List[int]) -> bool:
+        if self._shuffle_cave_addr:
+            self._remove_shuffle_hook()
+
+        pm   = self.pm
+        base = self.base
+        MEM_COMMIT             = 0x1000
+        MEM_RESERVE            = 0x2000
+        PAGE_EXECUTE_READWRITE = 0x40
+
+        block = ctypes.windll.kernel32.VirtualAllocEx(
+            pm.process_handle, None, 60 + 32 + 25,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+        )
+        if not block:
+            logger.error("[FF2] Shuffle hook: alloc failed")
+            return False
+
+        table_addr = block
+        cave1_addr = block + 60
+        cave2_addr = block + 60 + 32
+
+        written = ctypes.c_size_t(0)
+        ctypes.windll.kernel32.WriteProcessMemory(
+            pm.process_handle, ctypes.c_void_p(table_addr),
+            bytes(shuffle[:60]), 60, ctypes.byref(written),
+        )
+
+        cave1, cave2 = _build_shuffle_caves(table_addr, cave1_addr, cave2_addr)
+        ctypes.windll.kernel32.WriteProcessMemory(
+            pm.process_handle, ctypes.c_void_p(cave1_addr),
+            cave1, len(cave1), ctypes.byref(written),
+        )
+        ctypes.windll.kernel32.WriteProcessMemory(
+            pm.process_handle, ctypes.c_void_p(cave2_addr),
+            cave2, len(cave2), ctypes.byref(written),
+        )
+
+        site1 = base + SHUFFLE_CLICK_OFFSET
+        rel1  = (cave1_addr - (site1 + 5)) & 0xFFFFFFFF
+        write_bytes(pm, site1, b'\xE8' + struct.pack('<I', rel1) + b'\x90\x90\x90')
+
+        site2 = base + SHUFFLE_ADVANCE_OFFSET
+        rel2  = (cave2_addr - (site2 + 5)) & 0xFFFFFFFF
+        write_bytes(pm, site2, b'\xE8' + struct.pack('<I', rel2))
+
+        self._shuffle_cave_addr = block
+        logger.info(f"[FF2] Shuffle hook installed (block: 0x{block:08X})")
+        return True
+
+    def _remove_shuffle_hook(self) -> None:
+        cave = self._shuffle_cave_addr
+        if not cave:
+            return
+        if self.pm and self.base:
+            try:
+                write_bytes(self.pm, self.base + SHUFFLE_CLICK_OFFSET,   SHUFFLE_CLICK_ORIGINAL)
+            except Exception:
+                pass
+            try:
+                write_bytes(self.pm, self.base + SHUFFLE_ADVANCE_OFFSET, SHUFFLE_ADVANCE_ORIGINAL)
+            except Exception:
+                pass
+        try:
+            ctypes.windll.kernel32.VirtualFreeEx(
+                self.pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000,
+            )
+        except Exception:
+            pass
+        self._shuffle_cave_addr = None
+        logger.info("[FF2] Shuffle hook removed")
+
     def _apply_fish_item(self):
         try:
             allowed = max_allowed_stage(self.fish_received)
@@ -863,9 +962,10 @@ class FF2Context(CommonContext):
             logger.info("[FF2] DeathLink — no level object, dropping"); return
 
         try:
-            level_id = read_int(self.pm, self.level_obj + OFFSET_LEVEL_ID)
-            if (level_id + 1) in BONUS_LEVELS:
-                logger.info(f"[FF2] DeathLink — bonus level {level_id + 1}, dropping"); return
+            level_id    = read_int(self.pm, self.level_obj + OFFSET_LEVEL_ID)
+            content_id  = self._content_level(level_id)
+            if (content_id + 1) in BONUS_LEVELS:
+                logger.info(f"[FF2] DeathLink — bonus content {content_id + 1} at slot {level_id + 1}, dropping"); return
         except Exception:
             return
 
@@ -884,6 +984,60 @@ class FF2Context(CommonContext):
             logger.info("[FF2] DeathLink — death triggered")
         except Exception as e:
             logger.error(f"[FF2] DeathLink apply failed: {e}")
+
+# ── Shuffle cave builder ──────────────────────────────────────────────────────
+
+def _build_shuffle_caves(table_addr: int, cave1_addr: int, cave2_addr: int):
+    """
+    Build x86 machine code for the two level-shuffle intercept caves.
+
+    Cave 1 (map click, 32 bytes):
+      Reads slot N from [ecx+0xC], looks up content M = table[N],
+      puts M in ecx, then tail-calls 0x4980C0 (content loader).
+      Slots 0 and 59 pass through unchanged.
+
+    Cave 2 (auto-advance, 25 bytes):
+      Saves level_object (eax) and slot N+1 (ebx), writes content M
+      to [level_obj+0x28] so 0x4966D0 loads the right content,
+      calls 0x4966D0, then restores slot N+1 to [level_obj+0x28].
+    """
+    # ── Cave 1 ────────────────────────────────────────────────────────────────
+    c1 = bytearray()
+    c1 += b'\x50'                                    # push eax
+    c1 += b'\x52'                                    # push edx
+    c1 += b'\x8B\x41\x0C'                           # mov eax,[ecx+0xC]  (slot N)
+    c1 += b'\x85\xC0'                               # test eax,eax
+    c1 += b'\x74\x0E'                               # jz done  (slot 0 → pass through)
+    c1 += b'\x83\xF8\x3B'                           # cmp eax,59
+    c1 += b'\x74\x09'                               # je done  (slot 59 → pass through)
+    c1 += b'\xBA' + struct.pack('<I', table_addr)   # mov edx,table_addr
+    c1 += b'\x0F\xB6\x04\x02'                       # movzx eax,byte[edx+eax]
+    # done (offset 23):
+    c1 += b'\x89\xC1'                               # mov ecx,eax
+    c1 += b'\x5A'                                   # pop edx
+    c1 += b'\x58'                                   # pop eax
+    rel1 = (CONTENT_CLICK_TARGET - (cave1_addr + len(c1) + 5)) & 0xFFFFFFFF
+    c1 += b'\xE9' + struct.pack('<I', rel1)         # jmp 0x4980C0
+    assert len(c1) == 32, f"Cave 1 size mismatch: {len(c1)}"
+
+    # ── Cave 2 ────────────────────────────────────────────────────────────────
+    # Entry: eax = level_object, ebx = next slot N+1, [esp+0] = ret addr
+    c2 = bytearray()
+    c2 += b'\x50'                                   # push eax  (level_object)
+    c2 += b'\x52'                                   # push edx
+    c2 += b'\xBA' + struct.pack('<I', table_addr)  # mov edx,table_addr
+    c2 += b'\x0F\xB6\x14\x1A'                      # movzx edx,byte[edx+ebx]  (content M)
+    c2 += b'\x89\x50\x28'                          # mov [eax+0x28],edx  (write content)
+    c2 += b'\x5A'                                  # pop edx
+    rel2 = (CONTENT_ADVANCE_TARGET - (cave2_addr + len(c2) + 5)) & 0xFFFFFFFF
+    c2 += b'\xE8' + struct.pack('<I', rel2)        # call 0x4966D0
+    c2 += b'\x58'                                  # pop eax  (level_object)
+    c2 += b'\x89\x58\x28'                         # mov [eax+0x28],ebx  (restore slot)
+    c2 += b'\xC3'                                  # ret
+    assert len(c2) == 25, f"Cave 2 size mismatch: {len(c2)}"
+
+    return bytes(c1), bytes(c2)
+
 
 # ── Deathlink routine ───────────────────────────────────────────────────────────────
 def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
@@ -957,21 +1111,23 @@ async def game_watcher(ctx: FF2Context):
             break
 
         # reset game-session state (Archipelago state — fish_received, completed_*, etc. — preserved)
+        # level_shuffle is also preserved — same seed = same shuffle every session
         ctx._stop_event.set()
-        ctx._stop_event     = threading.Event()
-        ctx.level_obj        = None
-        ctx.max_stage_addr   = None
-        ctx.player_fish      = None
-        ctx.sub_object       = None
-        ctx.game_ready       = False
-        ctx.boss_hp_addr     = None
-        ctx._boss_hp_capturing = False
-        ctx._last_level_id   = None
-        ctx._last_stage      = None
-        ctx._last_max_stage  = None
-        ctx._last_lives      = None
-        ctx._stable_level_id = None
-        ctx._stable_count    = 0
+        ctx._stop_event      = threading.Event()
+        ctx.level_obj         = None
+        ctx.max_stage_addr    = None
+        ctx.player_fish       = None
+        ctx.sub_object        = None
+        ctx.game_ready        = False
+        ctx.boss_hp_addr      = None
+        ctx._boss_hp_capturing  = False
+        ctx._last_level_id    = None
+        ctx._last_stage       = None
+        ctx._last_max_stage   = None
+        ctx._last_lives       = None
+        ctx._stable_level_id  = None
+        ctx._stable_count     = 0
+        ctx._shuffle_cave_addr = None   # old process memory is gone; reinstall on next ready
 
         pm   = ctx.pm
         base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
@@ -987,6 +1143,9 @@ async def game_watcher(ctx: FF2Context):
         logger.info("[FF2] Game ready. Watching for checks...")
         make_window_resizable()
         _start_proxy_window(ctx._stop_event)
+
+        if ctx.level_shuffle:
+            ctx._install_shuffle_hook(ctx.level_shuffle)
 
         ctx._block_dash()
         if ctx.dash_received:
@@ -1064,23 +1223,22 @@ async def game_watcher(ctx: FF2Context):
                             check_key = (current_level, current_stage)
                             if check_key not in ctx._completed_stages:
                                 ctx._completed_stages.add(check_key)
-                                level_1  = current_level
-                                is_bonus = (level_1 + 1) in BONUS_LEVELS
+                                content_lvl = ctx._content_level(current_level)
+                                is_bonus    = (content_lvl + 1) in BONUS_LEVELS
                                 if not is_bonus:
-                                    slot   = current_stage - 1
-                                    loc_id = location_id_for(level_1, slot)
+                                    loc_id = location_id_for(content_lvl, current_stage - 1)
                                     ctx._send_location(loc_id)
-                                    logger.info(f"[FF2] Check: Level {level_1 + 1} Stage {current_stage}")
+                                    logger.info(f"[FF2] Check: Slot {current_level + 1} → Content {content_lvl + 1} Stage {current_stage}")
 
                     # ── level completion ──────────────────────────────────
                     if ctx._last_level_id is not None and current_level == ctx._last_level_id + 1:
                         completed_id = ctx._last_level_id
                         if completed_id not in ctx._completed_levels:
                             ctx._completed_levels.add(completed_id)
-                            level_1  = completed_id
-                            loc_id   = location_id_for(level_1, 2)
+                            content_lvl = ctx._content_level(completed_id)
+                            loc_id      = location_id_for(content_lvl, 2)
                             ctx._send_location(loc_id)
-                            logger.info(f"[FF2] Check: Level {level_1 + 1} Complete")
+                            logger.info(f"[FF2] Check: Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
 
                         ctx.player_fish = None
                         ctx.sub_object  = None

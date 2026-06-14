@@ -3,6 +3,8 @@ import pymem.process
 import ctypes
 import ctypes.wintypes as wintypes
 import sys
+import random as _random
+import struct
 import threading
 import time
 
@@ -54,6 +56,19 @@ FOCUS_PAUSE_OFFSET   = 0x2497F
 FOCUS_PAUSE_ORIGINAL = bytes([0x0F, 0x95, 0xC0])
 FOCUS_PAUSE_NOP      = bytes([0xB0, 0x01, 0x90])
 BONUS_LEVELS    = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
+
+# level-shuffle hook offsets
+SHUFFLE_CLICK_OFFSET     = 0x11621
+SHUFFLE_CLICK_ORIGINAL   = bytes([0x8B, 0x49, 0x0C, 0xE8, 0x97, 0x6A, 0x08, 0x00])
+CONTENT_CLICK_TARGET     = 0x004980C0
+SHUFFLE_ADVANCE_OFFSET   = 0x9AFD0
+SHUFFLE_ADVANCE_ORIGINAL = bytes([0xE8, 0xFB, 0xB6, 0xFF, 0xFF])
+CONTENT_ADVANCE_TARGET   = 0x004966D0
+
+MEM_COMMIT             = 0x1000
+MEM_RESERVE            = 0x2000
+MEM_RELEASE            = 0x8000
+PAGE_EXECUTE_READWRITE = 0x40
 
 DBG_CONTINUE      = 0x00010002
 TH32CS_SNAPTHREAD = 0x00000004
@@ -190,7 +205,11 @@ def get_process_threads(pid):
 def get_thread_handle(tid):
     return ctypes.windll.kernel32.OpenThread(THREAD_ACCESS, False, tid)
 
-def set_hardware_breakpoint(thread_handle, address, dr_index=0):
+def set_hardware_breakpoint(thread_handle, address, dr_index=0, bp_type=0, bp_len=3):
+    """
+    bp_type: 0=execute, 1=write, 3=read/write
+    bp_len:  0=1B, 1=2B, 3=4B (ignored for execute BPs)
+    """
     if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
         return False
     try:
@@ -203,8 +222,11 @@ def set_hardware_breakpoint(thread_handle, address, dr_index=0):
         elif dr_index == 1:
             ctx.Dr1 = address
         ctx.Dr6 = 0
-        ctx.Dr7 |= (0x1 << (dr_index * 2))
         ctx.Dr7 &= ~(0xF << (16 + dr_index * 4))
+        if bp_type:
+            nibble = (bp_type & 3) | ((bp_len & 3) << 2)
+            ctx.Dr7 |= (nibble << (16 + dr_index * 4))
+        ctx.Dr7 |= (0x1 << (dr_index * 2))
         ctx.ContextFlags = CONTEXT_CAPTURE
         return bool(Wow64SetThreadContext(thread_handle, ctypes.byref(ctx)))
     finally:
@@ -227,10 +249,10 @@ def clear_hardware_breakpoint(thread_handle, dr_index=0):
     finally:
         ctypes.windll.kernel32.ResumeThread(thread_handle)
 
-def set_bp_on_thread(tid, address, dr_index=0):
+def set_bp_on_thread(tid, address, dr_index=0, bp_type=0, bp_len=3):
     th = get_thread_handle(tid)
     if th:
-        ok = set_hardware_breakpoint(th, address, dr_index)
+        ok = set_hardware_breakpoint(th, address, dr_index, bp_type, bp_len)
         ctypes.windll.kernel32.CloseHandle(th)
         return ok
     return False
@@ -293,6 +315,58 @@ def run_debug_capture(pm, target, dr_index, stop_event, on_hit):
             ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
             break
 
+    return result
+
+def _run_debug_loop(pm, target, dr_index, stop_event, on_hit, bp_type=0, bp_len=3, multi_hit=False):
+    """
+    General-purpose debug loop.
+    execute BP (bp_type=0): fires when EIP==target.
+    write BP   (bp_type=1): fires when target address is written; checks Dr6 bit.
+    multi_hit=False: stops after on_hit returns non-None (probe mode).
+    multi_hit=True : keeps going until stop_event (watch mode).
+    """
+    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
+        print(f"  [dbg] attach failed (error {ctypes.windll.kernel32.GetLastError()}) — another capture may still be running")
+        return None
+    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
+    for tid in get_process_threads(pm.process_id):
+        set_bp_on_thread(tid, target, dr_index, bp_type, bp_len)
+    result      = None
+    debug_event = DEBUG_EVENT()
+    while (multi_hit or result is None) and not stop_event.is_set():
+        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
+            continue
+        event_code = debug_event.dwDebugEventCode
+        tid        = debug_event.dwThreadId
+        if event_code == 1:
+            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
+            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
+            is_hw = (code == 0x80000004 or
+                     (bp_type == 0 and exc_addr == target and code not in (0x80000003,)))
+            if is_hw:
+                th = get_thread_handle(tid)
+                if th:
+                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
+                        try:
+                            ctx = CONTEXT()
+                            ctx.ContextFlags = CONTEXT_CAPTURE
+                            if Wow64GetThreadContext(th, ctypes.byref(ctx)):
+                                fired = (ctx.Eip == target) if bp_type == 0 else bool(ctx.Dr6 & (1 << dr_index))
+                                if fired:
+                                    ctx.Dr6 = 0
+                                    ctx.ContextFlags = CONTEXT_CAPTURE
+                                    Wow64SetThreadContext(th, ctypes.byref(ctx))
+                                    ret = on_hit(ctx)
+                                    if not multi_hit and ret is not None:
+                                        result = ret
+                                        clear_hardware_breakpoint(th, dr_index)
+                        finally:
+                            ctypes.windll.kernel32.ResumeThread(th)
+                    ctypes.windll.kernel32.CloseHandle(th)
+        elif event_code == 3:
+            set_bp_on_thread(tid, target, dr_index, bp_type, bp_len)
+        ctypes.windll.kernel32.ContinueDebugEvent(debug_event.dwProcessId, tid, DBG_CONTINUE)
+    ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
     return result
 
 def capture_level_object(pm, base):
@@ -412,221 +486,6 @@ def make_window_resizable():
     print(f"  [window] Resizable, cursor unclipped (hwnd=0x{hwnd:08X})")
     return True
 
-
-# ── Proxy window (DWM thumbnail approach) ─────────────────────────────────────
-# Creates a resizable Win32 window that shows the game via DwmRegisterThumbnail.
-# DWM handles GPU-accelerated scaling. Mouse/keyboard events are scaled and
-# forwarded to the game via PostMessageA. Game window is moved off-screen.
-
-PM_REMOVE      = 0x0001
-SWP_NOACTIVATE = 0x0010
-
-# DWM thumbnail flags
-DWM_TNP_RECTDESTINATION      = 0x1
-DWM_TNP_OPACITY              = 0x4
-DWM_TNP_VISIBLE              = 0x8
-DWM_TNP_SOURCECLIENTAREAONLY = 0x10
-
-WS_OVERLAPPEDWINDOW = 0x00CF0000
-WS_VISIBLE          = 0x10000000
-CS_HREDRAW          = 0x0002
-CS_VREDRAW          = 0x0001
-WM_DESTROY          = 0x0002
-WM_SIZE             = 0x0005
-WM_CLOSE            = 0x0010
-WM_QUIT             = 0x0012
-
-PROXY_MOUSE_MSGS = frozenset([0x200,0x201,0x202,0x203,0x204,0x205,0x206,0x207,0x208])
-PROXY_KEY_MSGS   = frozenset([0x100,0x101,0x102])
-
-class DWM_THUMBNAIL_PROPERTIES(ctypes.Structure):
-    _fields_ = [
-        ("dwFlags",               ctypes.c_uint),
-        ("rcDestination",         wintypes.RECT),
-        ("rcSource",              wintypes.RECT),
-        ("opacity",               ctypes.c_ubyte),
-        ("fVisible",              wintypes.BOOL),
-        ("fSourceClientAreaOnly", wintypes.BOOL),
-    ]
-
-# Explicit Win64 types — wintypes.WPARAM/LPARAM/LRESULT may be 32-bit on some
-# Python builds even on 64-bit Windows, so use c_longlong directly.
-_WPARAM  = ctypes.c_ulonglong
-_LPARAM  = ctypes.c_longlong
-_LRESULT = ctypes.c_longlong
-
-WNDPROCTYPE = ctypes.WINFUNCTYPE(
-    _LRESULT, wintypes.HWND, ctypes.c_uint, _WPARAM, _LPARAM
-)
-
-class WNDCLASSEX(ctypes.Structure):
-    _fields_ = [
-        ("cbSize",        ctypes.c_uint),
-        ("style",         ctypes.c_uint),
-        ("lpfnWndProc",   WNDPROCTYPE),
-        ("cbClsExtra",    ctypes.c_int),
-        ("cbWndExtra",    ctypes.c_int),
-        ("hInstance",     wintypes.HANDLE),
-        ("hIcon",         wintypes.HANDLE),
-        ("hCursor",       wintypes.HANDLE),
-        ("hbrBackground", wintypes.HANDLE),
-        ("lpszMenuName",  ctypes.c_char_p),
-        ("lpszClassName", ctypes.c_char_p),
-        ("hIconSm",       wintypes.HANDLE),
-    ]
-
-_proxy_wndproc_ref = None   # keep WNDPROCTYPE callback alive
-
-
-def _run_proxy_window(game_hwnd, game_w, game_h, stop_event):
-    global _proxy_wndproc_ref
-    user32   = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    dwmapi   = ctypes.windll.dwmapi
-    gdi32    = ctypes.windll.gdi32
-
-    # Without argtypes, ctypes defaults to c_int for each arg (32-bit).
-    # On 64-bit Python, WPARAM/LPARAM are 64-bit so pointer-valued lparam values
-    # overflow — setting argtypes tells ctypes the correct widths.
-    _MSG_ARGS = [wintypes.HWND, ctypes.c_uint, _WPARAM, _LPARAM]
-    user32.DefWindowProcA.argtypes = _MSG_ARGS
-    user32.DefWindowProcA.restype  = _LRESULT
-    user32.PostMessageA.argtypes   = _MSG_ARGS
-    user32.PostMessageA.restype    = wintypes.BOOL
-
-    hthumbnail = wintypes.HANDLE(0)
-
-    def _update_thumb(cw, ch):
-        if not hthumbnail:
-            return
-        props = DWM_THUMBNAIL_PROPERTIES()
-        props.dwFlags = (DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY |
-                         DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY)
-        props.rcDestination = wintypes.RECT(0, 0, cw, ch)
-        props.opacity = 255
-        props.fVisible = True
-        props.fSourceClientAreaOnly = True
-        dwmapi.DwmUpdateThumbnailProperties(hthumbnail, ctypes.byref(props))
-
-    def _fwd_mouse(proxy_hwnd, msg, wparam, lparam):
-        rect = wintypes.RECT()
-        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
-        cw, ch = rect.right, rect.bottom
-        if cw <= 0 or ch <= 0:
-            return
-        x = lparam & 0xFFFF
-        y = (lparam >> 16) & 0xFFFF
-        if x >= 0x8000: x -= 0x10000
-        if y >= 0x8000: y -= 0x10000
-        sx = max(0, min(int(x * game_w / cw), game_w - 1))
-        sy = max(0, min(int(y * game_h / ch), game_h - 1))
-        user32.PostMessageA(game_hwnd, msg, wparam, (sy << 16) | (sx & 0xFFFF))
-
-    def wndproc(hwnd, msg, wparam, lparam):
-        nonlocal hthumbnail
-        if msg == WM_SIZE:
-            cw, ch = lparam & 0xFFFF, (lparam >> 16) & 0xFFFF
-            if cw > 0 and ch > 0:
-                _update_thumb(cw, ch)
-            return 0
-        elif msg in PROXY_MOUSE_MSGS:
-            _fwd_mouse(hwnd, msg, wparam, lparam)
-            return 0
-        elif msg in PROXY_KEY_MSGS:
-            user32.PostMessageA(game_hwnd, msg, wparam, lparam)
-            return 0
-        elif msg == WM_CLOSE:
-            if hthumbnail:
-                dwmapi.DwmUnregisterThumbnail(hthumbnail)
-                hthumbnail = None
-            user32.DestroyWindow(hwnd)
-            return 0
-        elif msg == WM_DESTROY:
-            user32.PostQuitMessage(0)
-            return 0
-        return user32.DefWindowProcA(hwnd, msg, wparam, lparam)
-
-    _proxy_wndproc_ref = WNDPROCTYPE(wndproc)
-    hinstance  = kernel32.GetModuleHandleA(None)
-    class_name = b"FF2Proxy"
-
-    wc = WNDCLASSEX()
-    wc.cbSize        = ctypes.sizeof(WNDCLASSEX)
-    wc.style         = CS_HREDRAW | CS_VREDRAW
-    wc.lpfnWndProc   = _proxy_wndproc_ref
-    wc.hInstance     = hinstance
-    wc.hCursor       = user32.LoadCursorW(0, 32512)          # IDC_ARROW
-    wc.hbrBackground = gdi32.GetStockObject(4)               # DKGRAY_BRUSH
-    wc.lpszClassName = class_name
-
-    if not user32.RegisterClassExA(ctypes.byref(wc)):
-        print(f"  [proxy] RegisterClassEx failed: {kernel32.GetLastError()}")
-        return
-
-    # Size window so client area starts at 2× game resolution
-    cr = wintypes.RECT(0, 0, game_w * 2, game_h * 2)
-    user32.AdjustWindowRect(ctypes.byref(cr), WS_OVERLAPPEDWINDOW, False)
-    init_w = cr.right  - cr.left
-    init_h = cr.bottom - cr.top
-
-    proxy_hwnd = user32.CreateWindowExA(
-        0, class_name, b"Feeding Frenzy 2",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        100, 100, init_w, init_h,
-        None, None, hinstance, None,
-    )
-    if not proxy_hwnd:
-        print(f"  [proxy] CreateWindowExA failed: {kernel32.GetLastError()}")
-        user32.UnregisterClassA(class_name, hinstance)
-        return
-
-    # Register DWM live thumbnail: game → proxy
-    hr = dwmapi.DwmRegisterThumbnail(proxy_hwnd, game_hwnd, ctypes.byref(hthumbnail))
-    if hr != 0:
-        print(f"  [proxy] DwmRegisterThumbnail failed: 0x{hr & 0xFFFFFFFF:08X}")
-    else:
-        rect = wintypes.RECT()
-        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
-        _update_thumb(rect.right, rect.bottom)
-        print(f"  [proxy] Live thumbnail active (proxy=0x{proxy_hwnd:08X})")
-
-    # Move game window off-screen — DWM still renders it for the thumbnail
-
-    msg = wintypes.MSG()
-    while not stop_event.is_set():
-        if user32.PeekMessageA(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
-            if msg.message == WM_QUIT:
-                break
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageA(ctypes.byref(msg))
-        else:
-            time.sleep(0.001)
-
-    if hthumbnail:
-        dwmapi.DwmUnregisterThumbnail(hthumbnail)
-    user32.UnregisterClassA(class_name, hinstance)
-    print("  [proxy] Closed")
-
-
-def enable_scaling(stop_event):
-    user32 = ctypes.windll.user32
-    hwnd   = user32.FindWindowA(b"Gatsu", None)
-    if not hwnd:
-        print("  [proxy] Game window not found")
-        return False
-
-    rect = wintypes.RECT()
-    user32.GetClientRect(hwnd, ctypes.byref(rect))
-    game_w = rect.right  or 800
-    game_h = rect.bottom or 600
-    print(f"  [proxy] Game resolution: {game_w}x{game_h}")
-
-    threading.Thread(
-        target=_run_proxy_window,
-        args=(hwnd, game_w, game_h, stop_event),
-        daemon=True,
-    ).start()
-    return True
 
 def patch_dash_block(pm, base):
     addr = base + DASH_CALL_OFFSET
@@ -789,19 +648,11 @@ def level_watcher(pm, base, level_obj, max_stage_addr, fish_received, player_inf
                 last_level_id = current_level
                 last_stage    = current_stage
 
-            # clamp mode0MaxStage only if it changed
+            # observe mode0MaxStage (no clamping — game manages it naturally here)
             if max_stage_addr[0] is not None:
                 current_max = read_int(pm, max_stage_addr[0])
                 if current_max != last_max_stage:
-                    allowed = max_allowed_stage(fish_received[0])
-                    if current_max > allowed:
-                        write_int(pm, max_stage_addr[0], allowed)
-                        print(f"\n  [watcher] mode0MaxStage clamped {current_max} -> {allowed}")
-                        reset_to_boundary_level(pm, level_obj)
-                        print("> ", end="", flush=True)
-                        last_max_stage = allowed
-                    else:
-                        last_max_stage = current_max
+                    last_max_stage = current_max
 
             # death link detection (lives dropped by exactly 1)
             if last_lives is not None and current_lives == last_lives - 1:
@@ -823,10 +674,6 @@ def _recapture_player_fish(pm, base, player_info, stop_event):
 def trigger_death(pm, player_fish, sub_object):
     """Call the player death function then trigger respawn loop."""
     DEATH_FUNC = 0x00404E10
-
-    MEM_COMMIT             = 0x1000
-    MEM_RESERVE            = 0x2000
-    PAGE_EXECUTE_READWRITE = 0x40
 
     cave = ctypes.windll.kernel32.VirtualAllocEx(
         pm.process_handle,
@@ -870,20 +717,128 @@ def trigger_death(pm, player_fish, sub_object):
     if not thread:
         print(f"CreateRemoteThread failed: {ctypes.windll.kernel32.GetLastError()}")
         ctypes.windll.kernel32.VirtualFreeEx(
-            pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+            pm.process_handle, ctypes.c_void_p(cave), 0, MEM_RELEASE
         )
         return False
 
     ctypes.windll.kernel32.WaitForSingleObject(thread, 3000)
     ctypes.windll.kernel32.CloseHandle(thread)
     ctypes.windll.kernel32.VirtualFreeEx(
-        pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
+        pm.process_handle, ctypes.c_void_p(cave), 0, MEM_RELEASE
     )
 
     # trigger respawn loop by zeroing the respawn flag
     write_int(pm, player_fish + 0x98, 0)
 
     return True
+
+def generate_shuffle(seed=None):
+    """Return 60-element list where index=slot, value=content level. Slots 0 and 59 fixed."""
+    rng = _random.Random(seed)
+    indices = list(range(1, 59))
+    rng.shuffle(indices)
+    return [0] + indices + [59]
+
+
+def _build_shuffle_caves(table_addr, cave1_addr, cave2_addr):
+    # Cave 1: 32 bytes — map click path
+    # Entry: ecx = level_object
+    # Reads slot from [ecx+0xC], pass-through for 0/59, else looks up table[slot],
+    # puts content level in ecx, tail-calls CONTENT_CLICK_TARGET.
+    jmp_next = cave1_addr + 32
+    jmp_rel  = (CONTENT_CLICK_TARGET - jmp_next) & 0xFFFFFFFF
+
+    cave1 = bytearray([
+        0x50,                               # push eax
+        0x52,                               # push edx
+        0x8B, 0x41, 0x0C,                   # mov eax,[ecx+0xC]
+        0x85, 0xC0,                         # test eax,eax
+        0x74, 0x0E,                         # jz +0x0E  (→ offset 23)
+        0x83, 0xF8, 0x3B,                   # cmp eax,59
+        0x74, 0x09,                         # je +0x09  (→ offset 23)
+        0xBA,                               # mov edx,imm32
+        *table_addr.to_bytes(4, 'little'),  #   table_addr
+        0x0F, 0xB6, 0x04, 0x02,             # movzx eax,byte[edx+eax]
+        0x89, 0xC1,                         # mov ecx,eax  ← done (offset 23)
+        0x5A,                               # pop edx
+        0x58,                               # pop eax
+        0xE9,                               # jmp rel32
+        *jmp_rel.to_bytes(4, 'little'),     #   → CONTENT_CLICK_TARGET
+    ])
+    assert len(cave1) == 32, len(cave1)
+
+    # Cave 2: 25 bytes — auto-advance path
+    # Entry: eax = level_object, ebx = next slot (N+1)
+    # Temporarily writes table[N+1] to [eax+0x28], calls CONTENT_ADVANCE_TARGET,
+    # then restores slot N+1 to [eax+0x28].
+    call_next = cave2_addr + 20
+    call_rel  = (CONTENT_ADVANCE_TARGET - call_next) & 0xFFFFFFFF
+
+    cave2 = bytearray([
+        0x50,                               # push eax  (level_object)
+        0x52,                               # push edx
+        0xBA,                               # mov edx,imm32
+        *table_addr.to_bytes(4, 'little'),  #   table_addr
+        0x0F, 0xB6, 0x14, 0x1A,             # movzx edx,byte[edx+ebx]
+        0x89, 0x50, 0x28,                   # mov [eax+0x28],edx
+        0x5A,                               # pop edx
+        0xE8,                               # call rel32
+        *call_rel.to_bytes(4, 'little'),    #   → CONTENT_ADVANCE_TARGET
+        0x58,                               # pop eax  (level_object)
+        0x89, 0x58, 0x28,                   # mov [eax+0x28],ebx
+        0xC3,                               # ret
+    ])
+    assert len(cave2) == 25, len(cave2)
+
+    return bytes(cave1), bytes(cave2)
+
+
+def install_shuffle_hook(pm, base, shuffle):
+    """Allocate cave memory, write table+caves, patch both call sites. Returns cave base or None."""
+    TOTAL = 60 + 32 + 25  # 117 bytes
+
+    cave_mem = ctypes.windll.kernel32.VirtualAllocEx(
+        pm.process_handle, None, TOTAL,
+        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+    )
+    if not cave_mem:
+        print(f"  [shuffle] VirtualAllocEx failed: {ctypes.windll.kernel32.GetLastError()}")
+        return None
+
+    table_addr = cave_mem
+    cave1_addr = cave_mem + 60
+    cave2_addr = cave_mem + 60 + 32
+
+    write_bytes(pm, table_addr, bytes(shuffle[:60]))
+
+    cave1, cave2 = _build_shuffle_caves(table_addr, cave1_addr, cave2_addr)
+    write_bytes(pm, cave1_addr, cave1)
+    write_bytes(pm, cave2_addr, cave2)
+
+    # Patch click call site (8 bytes → 5-byte call + 3 NOPs)
+    site1 = base + SHUFFLE_CLICK_OFFSET
+    rel1  = (cave1_addr - (site1 + 5)) & 0xFFFFFFFF
+    write_bytes(pm, site1, bytes([0xE8]) + rel1.to_bytes(4, 'little') + bytes([0x90, 0x90, 0x90]))
+
+    # Patch advance call site (5 bytes → 5-byte call)
+    site2 = base + SHUFFLE_ADVANCE_OFFSET
+    rel2  = (cave2_addr - (site2 + 5)) & 0xFFFFFFFF
+    write_bytes(pm, site2, bytes([0xE8]) + rel2.to_bytes(4, 'little'))
+
+    print(f"  [shuffle] table=0x{table_addr:08X}  cave1=0x{cave1_addr:08X}  cave2=0x{cave2_addr:08X}")
+    print(f"  [shuffle] patched click@0x{site1:08X}  advance@0x{site2:08X}")
+    return cave_mem
+
+
+def remove_shuffle_hook(pm, base, cave_mem):
+    """Restore original bytes at both call sites and free cave memory."""
+    write_bytes(pm, base + SHUFFLE_CLICK_OFFSET,   SHUFFLE_CLICK_ORIGINAL)
+    write_bytes(pm, base + SHUFFLE_ADVANCE_OFFSET, SHUFFLE_ADVANCE_ORIGINAL)
+    ctypes.windll.kernel32.VirtualFreeEx(
+        pm.process_handle, ctypes.c_void_p(cave_mem), 0, MEM_RELEASE,
+    )
+    print("  [shuffle] hooks removed, cave memory freed")
+
 
 def print_help():
     print("Commands:")
@@ -897,13 +852,18 @@ def print_help():
     print("    items: life, fish")
     print("  die [delay]         - trigger player death (optionally after delay seconds)")
     print("  resize              - make game window resizable (applied on startup)")
-    print("  scale               - enable render+input scaling (applied on startup)")
     print("  nodash              - block dash (applied on startup)")
     print("  dash                - unblock dash (simulate receiving Dash item)")
     print("  nosuck              - block suck (applied on startup)")
     print("  suck                - unblock suck (simulate receiving Suck item)")
     print("  nopause             - NOP focus-loss pause (applied on startup)")
     print("  unpause             - restore focus-loss pause")
+    print("  probe <hex_addr>    - execute BP: capture registers when addr is hit (bg)")
+    print("  watchlevelid [n]    - write BP on level_id field, log n writes (default 8)")
+    print("  stopwatch           - cancel active probe/watchlevelid")
+    print("  randomize [seed]    - shuffle level order and install assembly hooks")
+    print("  unrandomize         - remove shuffle hooks, restore original bytes")
+    print("  showshuffle         - print current slot→content mapping")
     print("  quit                - exit")
 
 def main():
@@ -925,13 +885,16 @@ def main():
     patch_dash_block(pm, base)
     patch_suck_block(pm, base)
     make_window_resizable()
-    enable_scaling(stop_event)
 
     level_obj = capture_level_object(pm, base)
 
     max_stage_addr = [None]
     fish_received  = [0]
     player_info    = [None]
+    current_shuffle = [None]   # list[int] length 60: index=slot, value=content
+    cave_mem_addr   = [None]   # base address of allocated cave block
+    probe_stop      = [threading.Event()]
+    probe_stop[0].set()  # initially "done"
 
     def background_captures():
         # sequential — player fish first, then max stage
@@ -944,7 +907,8 @@ def main():
             if result:
                 max_stage_addr[0] = result
 
-    threading.Thread(target=background_captures, daemon=True).start()
+    bg_thread = threading.Thread(target=background_captures, daemon=True)
+    bg_thread.start()
 
     watcher_thread = threading.Thread(
         target=level_watcher,
@@ -1103,9 +1067,6 @@ def main():
         elif cmd == "resize":
             make_window_resizable()
 
-        elif cmd == "scale":
-            enable_scaling(stop_event)
-
         elif cmd == "nodash":
             patch_dash_block(pm, base)
 
@@ -1123,6 +1084,126 @@ def main():
 
         elif cmd == "unpause":
             unpatch_focus_pause(pm, base)
+
+        elif cmd == "randomize":
+            seed = parts[1] if len(parts) > 1 else None
+            if seed is not None:
+                try:
+                    seed = int(seed)
+                except ValueError:
+                    pass  # keep as string seed
+            shuffle = generate_shuffle(seed)
+            if cave_mem_addr[0] is not None:
+                remove_shuffle_hook(pm, base, cave_mem_addr[0])
+                cave_mem_addr[0] = None
+                current_shuffle[0] = None
+            result = install_shuffle_hook(pm, base, shuffle)
+            if result:
+                cave_mem_addr[0]   = result
+                current_shuffle[0] = shuffle
+                print(f"  [shuffle] Seed: {seed!r}  (slots 1-58 shuffled)")
+                print(f"  [shuffle] Slot 0 → content 0  (fixed)")
+                for slot in range(1, 59):
+                    content = shuffle[slot]
+                    marker = " *" if slot != content else ""
+                    print(f"  [shuffle] Slot {slot:2d} → content {content:2d}{marker}")
+                print(f"  [shuffle] Slot 59 → content 59 (fixed)")
+
+        elif cmd == "unrandomize":
+            if cave_mem_addr[0] is None:
+                print("  [shuffle] No hooks installed.")
+            else:
+                remove_shuffle_hook(pm, base, cave_mem_addr[0])
+                cave_mem_addr[0]   = None
+                current_shuffle[0] = None
+
+        elif cmd == "probe":
+            if len(parts) < 2:
+                print("Usage: probe <hex_addr>")
+                continue
+            try:
+                probe_addr = int(parts[1], 16)
+            except ValueError:
+                print("Usage: probe <hex_addr>")
+                continue
+            if bg_thread.is_alive():
+                print("  [probe] Background captures still running — complete a level first, or wait.")
+                continue
+            probe_stop[0].set()
+            probe_stop[0] = threading.Event()
+            ps  = probe_stop[0]
+            lobj = level_obj
+            print(f"  [probe] Waiting at 0x{probe_addr:08X} — trigger the action in-game now...")
+            def _do_probe(probe_addr=probe_addr, ps=ps, lobj=lobj):
+                def on_hit(ctx):
+                    print(f"\n  [probe] EIP=0x{ctx.Eip:08X}")
+                    print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}  EDX=0x{ctx.Edx:08X}")
+                    print(f"    ESI=0x{ctx.Esi:08X}  EDI=0x{ctx.Edi:08X}  EBP=0x{ctx.Ebp:08X}  ESP=0x{ctx.Esp:08X}")
+                    try:
+                        print(f"    [ESP] =0x{read_int(pm, ctx.Esp):08X}  (ret addr)")
+                    except Exception:
+                        pass
+                    for rn, rv in [("EAX", ctx.Eax), ("EBX", ctx.Ebx), ("ECX", ctx.Ecx)]:
+                        if 0x1000 < rv < 0x7FFFFFFF:
+                            try:
+                                v = read_int(pm, rv + OFFSET_LEVEL_ID)
+                                hint = " ← level_obj!" if rv == lobj else ""
+                                print(f"    [{rn}+0x28]=0x{v:08X} ({v}){hint}")
+                            except Exception:
+                                pass
+                    print("> ", end="", flush=True)
+                    return True
+                _run_debug_loop(pm, probe_addr, 0, ps, on_hit, bp_type=0)
+                print("\n  [probe] done")
+                print("> ", end="", flush=True)
+            threading.Thread(target=_do_probe, daemon=True).start()
+
+        elif cmd == "watchlevelid":
+            if level_obj is None:
+                print("  Level object not captured — start game first.")
+                continue
+            if bg_thread.is_alive():
+                print("  [watch] Background captures still running — complete a level first, or wait.")
+                continue
+            n = int(parts[1]) if len(parts) > 1 else 8
+            probe_stop[0].set()
+            probe_stop[0] = threading.Event()
+            ps  = probe_stop[0]
+            watch_addr = level_obj + OFFSET_LEVEL_ID
+            hit_n = [0]
+            print(f"  [watch] Write BP on level_id @ 0x{watch_addr:08X}, capturing {n} writes — trigger in-game...")
+            def _do_watch(watch_addr=watch_addr, n=n, ps=ps):
+                def on_hit(ctx):
+                    hit_n[0] += 1
+                    try:
+                        val = read_int(pm, watch_addr)
+                    except Exception:
+                        val = -1
+                    print(f"\n  [watch] write #{hit_n[0]:2d}: EIP=0x{ctx.Eip:08X}  level_id→{val}")
+                    print(f"    EAX=0x{ctx.Eax:08X}  EBX=0x{ctx.Ebx:08X}  ECX=0x{ctx.Ecx:08X}")
+                    print("> ", end="", flush=True)
+                    if hit_n[0] >= n:
+                        ps.set()
+                _run_debug_loop(pm, watch_addr, 0, ps, on_hit, bp_type=1, bp_len=3, multi_hit=True)
+                print(f"\n  [watch] done ({hit_n[0]} writes captured)")
+                print("> ", end="", flush=True)
+            threading.Thread(target=_do_watch, daemon=True).start()
+
+        elif cmd == "stopwatch":
+            probe_stop[0].set()
+            print("  [probe/watch] cancelled")
+
+        elif cmd == "showshuffle":
+            if current_shuffle[0] is None:
+                print("  [shuffle] No shuffle active.")
+            else:
+                shuffle = current_shuffle[0]
+                print(f"  [shuffle] cave @ 0x{cave_mem_addr[0]:08X}")
+                for slot in range(60):
+                    content = shuffle[slot]
+                    marker = " *" if slot != content else ""
+                    bonus = " (bonus)" if (content + 1) in BONUS_LEVELS else ""
+                    print(f"  slot {slot:2d} → content {content:2d}{bonus}{marker}")
 
         else:
             print(f"Unknown command: {cmd}")

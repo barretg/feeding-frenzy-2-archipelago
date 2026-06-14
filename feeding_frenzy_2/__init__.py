@@ -67,6 +67,12 @@ class FF2World(World):
     item_name_to_id:     Dict[str, int] = item_name_to_id
     location_name_to_id: Dict[str, int] = location_name_to_id
 
+    def generate_early(self) -> None:
+        # Slots 0 and 59 are fixed; shuffle content for slots 1-58.
+        indices = list(range(1, 59))
+        self.random.shuffle(indices)
+        self.level_shuffle: List[int] = [0] + indices + [59]
+
     def create_item(self, name: str) -> FF2Item:
         data = ITEM_TABLE[name]
         return FF2Item(name, data.classification, data.code, self.player)
@@ -113,10 +119,18 @@ class FF2World(World):
                 state.has("Progressive Fish", self.player, PROGRESSIVE_FISH_COUNT)
         )
 
-        # Place locations into zone regions
+        # Place locations into zone regions.
+        # With level shuffle the accessibility of each location depends on which
+        # map slot holds that content, so we map content → slot to find its zone.
+        content_to_slot: List[int] = [0] * 60
+        for slot, content in enumerate(self.level_shuffle):
+            content_to_slot[content] = slot
+
         for loc_name, loc_data in LOCATION_TABLE.items():
-            zone_region = zone_regions[loc_data.zone]
-            location = FF2Location(
+            slot        = content_to_slot[loc_data.level_id]
+            slot_zone   = zone_for_level_id(slot)
+            zone_region = zone_regions[slot_zone]
+            location    = FF2Location(
                 self.player, loc_name, loc_data.code, zone_region
             )
             zone_region.locations.append(location)
@@ -136,4 +150,5 @@ class FF2World(World):
         return {
             "death_link":      bool(self.options.death_link.value),
             "zone_boundaries": ZONE_BOUNDARIES,
+            "level_shuffle":   self.level_shuffle,
         }
