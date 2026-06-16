@@ -9,7 +9,6 @@ import ctypes.wintypes as wintypes
 import struct
 import sys
 import threading
-import time
 from typing import List, Optional
 
 import pymem
@@ -208,25 +207,37 @@ def read_int(pm: pymem.Pymem, address: int) -> int:
     return int.from_bytes(pm.read_bytes(address, 4), byteorder="little")
 
 
-_GWL_STYLE        = -16
-_WS_THICKFRAME    = 0x00040000
-_WS_MAXIMIZEBOX   = 0x00010000
-_SWP_NOMOVE       = 0x0002
-_SWP_NOSIZE       = 0x0001
-_SWP_NOZORDER     = 0x0004
-_SWP_FRAMECHANGED = 0x0020
+# ── Window / fullscreen / scalemouse / centerfix constants ───────────────────
+GWL_STYLE                = -16
+WS_POPUP                 = 0x80000000
+WS_CAPTION               = 0x00C00000
+WS_THICKFRAME            = 0x00040000
+WS_MINIMIZEBOX           = 0x00020000
+WS_MAXIMIZEBOX           = 0x00010000
+WS_SYSMENU               = 0x00080000
+SWP_NOZORDER             = 0x0004
+SWP_FRAMECHANGED         = 0x0020
+MONITOR_DEFAULTTONEAREST = 0x0002
 
-def make_window_resizable() -> None:
-    hwnd = ctypes.windll.user32.FindWindowA(b"Gatsu", None)
-    if not hwnd:
-        logger.warning("[FF2] Could not find game window to make resizable")
-        return
-    style = ctypes.windll.user32.GetWindowLongA(hwnd, _GWL_STYLE)
-    style |= _WS_THICKFRAME | _WS_MAXIMIZEBOX
-    ctypes.windll.user32.SetWindowLongA(hwnd, _GWL_STYLE, style)
-    ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
-        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED)
-    logger.info(f"[FF2] Window resizable (hwnd=0x{hwnd:08X})")
+WNDPROC_OFFSET   = 0x24780    # WndProc entry offset from exe base
+WNDPROC_RET_OFF  = 0x24786    # first instruction after stolen prologue
+WNDPROC_ORIGINAL = bytes([0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8])
+
+IAT_SETCURSORPOS = 0x146280   # 0x546280 - image base (0x400000)
+
+MEM_COMMIT             = 0x1000
+MEM_RESERVE            = 0x2000
+MEM_RELEASE            = 0x8000
+PAGE_EXECUTE_READWRITE = 0x40
+
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",    wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork",    wintypes.RECT),
+        ("dwFlags",   wintypes.DWORD),
+    ]
 
 
 def write_bytes(pm: pymem.Pymem, address: int, data: bytes) -> None:
@@ -251,200 +262,87 @@ def write_int(pm: pymem.Pymem, address: int, value: int) -> None:
     )
 
 
-# ── Proxy window (DWM thumbnail) ─────────────────────────────────────────────
+# ── Fullscreen / mouse-scale / centerfix helpers ──────────────────────────────
 
-_PM_REMOVE               = 0x0001
-_DWM_TNP_RECTDESTINATION = 0x1
-_DWM_TNP_OPACITY         = 0x4
-_DWM_TNP_VISIBLE         = 0x8
-_DWM_TNP_SOURCECLIENTONLY= 0x10
-_WS_OVERLAPPEDWINDOW     = 0x00CF0000
-_WS_VISIBLE              = 0x10000000
-_CS_HREDRAW              = 0x0002
-_CS_VREDRAW              = 0x0001
-_WM_DESTROY              = 0x0002
-_WM_SIZE                 = 0x0005
-_WM_CLOSE                = 0x0010
-_WM_QUIT                 = 0x0012
-
-_PROXY_MOUSE_MSGS = frozenset([0x200,0x201,0x202,0x203,0x204,0x205,0x206,0x207,0x208])
-_PROXY_KEY_MSGS   = frozenset([0x100,0x101,0x102])
-
-class _DWM_THUMBNAIL_PROPERTIES(ctypes.Structure):
-    _fields_ = [
-        ("dwFlags",               ctypes.c_uint),
-        ("rcDestination",         wintypes.RECT),
-        ("rcSource",              wintypes.RECT),
-        ("opacity",               ctypes.c_ubyte),
-        ("fVisible",              wintypes.BOOL),
-        ("fSourceClientAreaOnly", wintypes.BOOL),
-    ]
-
-_WPARAM_T  = ctypes.c_ulonglong
-_LPARAM_T  = ctypes.c_longlong
-_LRESULT_T = ctypes.c_longlong
-
-_WNDPROCTYPE = ctypes.WINFUNCTYPE(
-    _LRESULT_T, wintypes.HWND, ctypes.c_uint, _WPARAM_T, _LPARAM_T
-)
-
-class _WNDCLASSEX(ctypes.Structure):
-    _fields_ = [
-        ("cbSize",        ctypes.c_uint),
-        ("style",         ctypes.c_uint),
-        ("lpfnWndProc",   _WNDPROCTYPE),
-        ("cbClsExtra",    ctypes.c_int),
-        ("cbWndExtra",    ctypes.c_int),
-        ("hInstance",     wintypes.HANDLE),
-        ("hIcon",         wintypes.HANDLE),
-        ("hCursor",       wintypes.HANDLE),
-        ("hbrBackground", wintypes.HANDLE),
-        ("lpszMenuName",  ctypes.c_char_p),
-        ("lpszClassName", ctypes.c_char_p),
-        ("hIconSm",       wintypes.HANDLE),
-    ]
-
-_proxy_wndproc_ref = None  # keep WNDPROCTYPE alive — GC would silently break it
+def _game_hwnd() -> int:
+    return ctypes.windll.user32.FindWindowA(b"Gatsu", None)
 
 
-def _run_proxy_window(game_hwnd: int, game_w: int, game_h: int,
-                      stop_event: threading.Event) -> None:
-    global _proxy_wndproc_ref
-    user32   = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    dwmapi   = ctypes.windll.dwmapi
-    gdi32    = ctypes.windll.gdi32
-
-    _msg_args = [wintypes.HWND, ctypes.c_uint, _WPARAM_T, _LPARAM_T]
-    user32.DefWindowProcA.argtypes = _msg_args
-    user32.DefWindowProcA.restype  = _LRESULT_T
-    user32.PostMessageA.argtypes   = _msg_args
-    user32.PostMessageA.restype    = wintypes.BOOL
-
-    hthumbnail = wintypes.HANDLE(0)
-
-    def _update_thumb(cw: int, ch: int) -> None:
-        if not hthumbnail:
-            return
-        props = _DWM_THUMBNAIL_PROPERTIES()
-        props.dwFlags = (_DWM_TNP_RECTDESTINATION | _DWM_TNP_OPACITY |
-                         _DWM_TNP_VISIBLE | _DWM_TNP_SOURCECLIENTONLY)
-        props.rcDestination = wintypes.RECT(0, 0, cw, ch)
-        props.opacity = 255
-        props.fVisible = True
-        props.fSourceClientAreaOnly = True
-        dwmapi.DwmUpdateThumbnailProperties(hthumbnail, ctypes.byref(props))
-
-    def _fwd_mouse(proxy_hwnd: int, msg: int, wparam: int, lparam: int) -> None:
-        rect = wintypes.RECT()
-        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
-        cw, ch = rect.right, rect.bottom
-        if cw <= 0 or ch <= 0:
-            return
-        x = lparam & 0xFFFF
-        y = (lparam >> 16) & 0xFFFF
-        if x >= 0x8000: x -= 0x10000
-        if y >= 0x8000: y -= 0x10000
-        sx = max(0, min(int(x * game_w / cw), game_w - 1))
-        sy = max(0, min(int(y * game_h / ch), game_h - 1))
-        user32.PostMessageA(game_hwnd, msg, wparam, (sy << 16) | (sx & 0xFFFF))
-
-    def wndproc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        nonlocal hthumbnail
-        if msg == _WM_SIZE:
-            cw, ch = lparam & 0xFFFF, (lparam >> 16) & 0xFFFF
-            if cw > 0 and ch > 0:
-                _update_thumb(cw, ch)
-            return 0
-        elif msg in _PROXY_MOUSE_MSGS:
-            _fwd_mouse(hwnd, msg, wparam, lparam)
-            return 0
-        elif msg in _PROXY_KEY_MSGS:
-            user32.PostMessageA(game_hwnd, msg, wparam, lparam)
-            return 0
-        elif msg == _WM_CLOSE:
-            if hthumbnail:
-                dwmapi.DwmUnregisterThumbnail(hthumbnail)
-                hthumbnail = None
-            user32.DestroyWindow(hwnd)
-            return 0
-        elif msg == _WM_DESTROY:
-            user32.PostQuitMessage(0)
-            return 0
-        return user32.DefWindowProcA(hwnd, msg, wparam, lparam)
-
-    _proxy_wndproc_ref = _WNDPROCTYPE(wndproc)
-    hinstance  = kernel32.GetModuleHandleA(None)
-    class_name = b"FF2Proxy"
-
-    wc = _WNDCLASSEX()
-    wc.cbSize        = ctypes.sizeof(_WNDCLASSEX)
-    wc.style         = _CS_HREDRAW | _CS_VREDRAW
-    wc.lpfnWndProc   = _proxy_wndproc_ref
-    wc.hInstance     = hinstance
-    wc.hCursor       = user32.LoadCursorW(0, 32512)
-    wc.hbrBackground = gdi32.GetStockObject(4)
-    wc.lpszClassName = class_name
-
-    if not user32.RegisterClassExA(ctypes.byref(wc)):
-        logger.error(f"[FF2] Proxy RegisterClassExA failed: {kernel32.GetLastError()}")
-        return
-
-    cr = wintypes.RECT(0, 0, game_w * 2, game_h * 2)
-    user32.AdjustWindowRect(ctypes.byref(cr), _WS_OVERLAPPEDWINDOW, False)
-
-    proxy_hwnd = user32.CreateWindowExA(
-        0, class_name, b"Feeding Frenzy 2",
-        _WS_OVERLAPPEDWINDOW | _WS_VISIBLE,
-        100, 100, cr.right - cr.left, cr.bottom - cr.top,
-        None, None, hinstance, None,
-    )
-    if not proxy_hwnd:
-        logger.error(f"[FF2] Proxy CreateWindowExA failed: {kernel32.GetLastError()}")
-        user32.UnregisterClassA(class_name, hinstance)
-        return
-
-    hr = dwmapi.DwmRegisterThumbnail(proxy_hwnd, game_hwnd, ctypes.byref(hthumbnail))
-    if hr != 0:
-        logger.error(f"[FF2] DwmRegisterThumbnail failed: 0x{hr & 0xFFFFFFFF:08X}")
-    else:
-        rect = wintypes.RECT()
-        user32.GetClientRect(proxy_hwnd, ctypes.byref(rect))
-        _update_thumb(rect.right, rect.bottom)
-        logger.info(f"[FF2] Proxy window active (hwnd=0x{proxy_hwnd:08X})")
-
-    wmsg = wintypes.MSG()
-    while not stop_event.is_set():
-        if user32.PeekMessageA(ctypes.byref(wmsg), None, 0, 0, _PM_REMOVE):
-            if wmsg.message == _WM_QUIT:
-                break
-            user32.TranslateMessage(ctypes.byref(wmsg))
-            user32.DispatchMessageA(ctypes.byref(wmsg))
-        else:
-            time.sleep(0.001)
-
-    if hthumbnail:
-        dwmapi.DwmUnregisterThumbnail(hthumbnail)
-    user32.UnregisterClassA(class_name, hinstance)
-    logger.info("[FF2] Proxy window closed")
+def _client_size(hwnd: int):
+    r = wintypes.RECT()
+    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(r))
+    return r.right, r.bottom
 
 
-def _start_proxy_window(stop_event: threading.Event) -> None:
-    user32 = ctypes.windll.user32
-    hwnd   = user32.FindWindowA(b"Gatsu", None)
-    if not hwnd:
-        logger.warning("[FF2] Could not find game window for proxy")
-        return
-    rect = wintypes.RECT()
-    user32.GetClientRect(hwnd, ctypes.byref(rect))
-    game_w = rect.right  or 800
-    game_h = rect.bottom or 600
-    logger.info(f"[FF2] Starting proxy window ({game_w}x{game_h})")
-    threading.Thread(
-        target=_run_proxy_window,
-        args=(hwnd, game_w, game_h, stop_event),
-        daemon=True,
-    ).start()
+def _client_center_screen(hwnd: int):
+    r = wintypes.RECT()
+    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(r))
+    pt = wintypes.POINT(r.right // 2, r.bottom // 2)
+    ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+def _build_mouse_cave(block: int, base: int) -> bytes:
+    """WndProc entry hook: rescale WM_MOUSE* lParam coords to 800×600 canvas space."""
+    sx_addr = block + 0
+    sy_addr = block + 4
+
+    work = bytearray()
+    work += bytes([0x0F, 0xBF, 0x45, 0x14])                        # movsx eax,word [ebp+14]  ; X
+    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sx_addr)  # imul eax,[sx]
+    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16
+    work += bytes([0x0F, 0xB7, 0xD0])                               # movzx edx,ax
+    work += bytes([0x52])                                           # push edx
+    work += bytes([0x8B, 0x45, 0x14])                               # mov eax,[ebp+14]
+    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16               ; Y
+    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sy_addr)  # imul eax,[sy]
+    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16
+    work += bytes([0xC1, 0xE0, 0x10])                               # shl eax,16
+    work += bytes([0x5A])                                           # pop edx
+    work += bytes([0x0F, 0xB7, 0xD2])                               # movzx edx,dx
+    work += bytes([0x09, 0xD0])                                     # or eax,edx
+    work += bytes([0x89, 0x45, 0x14])                               # mov [ebp+14],eax
+
+    code = bytearray()
+    code += bytes([0x55])                                           # push ebp
+    code += bytes([0x8B, 0xEC])                                     # mov ebp,esp
+    code += bytes([0x50])                                           # push eax
+    code += bytes([0x52])                                           # push edx
+    code += bytes([0x8B, 0x45, 0x0C])                               # mov eax,[ebp+0C]  ; msg
+    code += bytes([0x2D, 0x00, 0x02, 0x00, 0x00])                   # sub eax,0x200
+    code += bytes([0x83, 0xF8, 0x09])                               # cmp eax,9
+    code += bytes([0x77, len(work)])                                # ja .restore
+    code += work
+    code += bytes([0x5A])                                           # pop edx  (.restore)
+    code += bytes([0x58])                                           # pop eax
+    code += bytes([0x5D])                                           # pop ebp
+    code += bytes([0x55])                                           # push ebp  (stolen)
+    code += bytes([0x8B, 0xEC])                                     # mov ebp,esp (stolen)
+    code += bytes([0x83, 0xE4, 0xF8])                               # and esp,-8  (stolen)
+    jmp_pos  = block + 8 + len(code)
+    ret_addr = base + WNDPROC_RET_OFF
+    rel      = (ret_addr - (jmp_pos + 5)) & 0xFFFFFFFF
+    code += bytes([0xE9]) + struct.pack('<I', rel)                  # jmp WNDPROC_RET_OFF
+    return bytes(code)
+
+
+def _build_centerfix_cave(cave: int) -> bytes:
+    """IAT replacement for SetCursorPos. Redirects park call to true screen center.
+    Cave layout: [+0]=screenX [+4]=screenY [+8]=real ptr [+12]=enable
+                 [+20]=last_orig_x [+24]=last_orig_y  code@+28"""
+    code = bytearray()
+    code += bytes([0x8B, 0x44, 0x24, 0x04])                        # mov eax,[esp+4]  (orig x)
+    code += bytes([0xA3]) + struct.pack('<I', cave + 20)            # mov [cave+20],eax
+    code += bytes([0x8B, 0x44, 0x24, 0x08])                        # mov eax,[esp+8]  (orig y)
+    code += bytes([0xA3]) + struct.pack('<I', cave + 24)            # mov [cave+24],eax
+    code += bytes([0x83, 0x3D]) + struct.pack('<I', cave + 12) + bytes([0x00])  # cmp [enable],0
+    code += bytes([0x74, 18])                                       # je .pass (skip 18 bytes)
+    code += bytes([0xA1]) + struct.pack('<I', cave + 0)             # mov eax,[screenX]
+    code += bytes([0x89, 0x44, 0x24, 0x04])                        # mov [esp+4],eax
+    code += bytes([0xA1]) + struct.pack('<I', cave + 4)             # mov eax,[screenY]
+    code += bytes([0x89, 0x44, 0x24, 0x08])                        # mov [esp+8],eax
+    code += bytes([0xFF, 0x25]) + struct.pack('<I', cave + 8)       # jmp [real]
+    return bytes(code)
 
 
 # ── Thread / breakpoint helpers ───────────────────────────────────────────────
@@ -667,6 +565,14 @@ def reset_to_boundary_level(pm: pymem.Pymem, level_obj: int) -> None:
 # ── Command processor ─────────────────────────────────────────────────────────
 
 class FF2CommandProcessor(ClientCommandProcessor):
+    def _cmd_fullscreen(self):
+        """Toggle borderless windowed fullscreen with scaled mouse input."""
+        ctx: FF2Context = self.ctx
+        if not ctx.pm or not ctx.base:
+            logger.info("[FF2] Game not ready.")
+            return
+        ctx._toggle_fullscreen()
+
     def _cmd_status(self):
         """Show current game state."""
         ctx: FF2Context = self.ctx
@@ -732,6 +638,12 @@ class FF2Context(CommonContext):
         # shuffle state (persists across game restarts — same seed = same shuffle)
         self.level_shuffle:      Optional[List[int]] = None
         self._shuffle_cave_addr: Optional[int]       = None
+
+        # fullscreen / scalemouse / centerfix state (reset on game process restart)
+        self._borderless_saved:  dict            = {}
+        self._mouse_cave:        Optional[int]   = None
+        self._centerfix_cave:    Optional[tuple] = None
+        self._setcursorpos_real: Optional[int]   = None
 
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
@@ -831,9 +743,6 @@ class FF2Context(CommonContext):
 
         pm   = self.pm
         base = self.base
-        MEM_COMMIT             = 0x1000
-        MEM_RESERVE            = 0x2000
-        PAGE_EXECUTE_READWRITE = 0x40
 
         TOTAL = 60 + 30 + 30 + 31  # table + cave1 + cave2 + cave3
         block = ctypes.windll.kernel32.VirtualAllocEx(
@@ -1002,6 +911,165 @@ class FF2Context(CommonContext):
         except Exception as e:
             logger.error(f"[FF2] DeathLink apply failed: {e}")
 
+    # ── Fullscreen / scalemouse / centerfix ───────────────────────────────────
+
+    def _toggle_fullscreen(self) -> None:
+        hwnd = _game_hwnd()
+        if not hwnd:
+            logger.info("[FF2] Game window not found"); return
+        if self._mouse_cave is None:
+            if not self._apply_borderless(hwnd):
+                return
+            self._install_mouse_scale(hwnd)
+            self._install_centerfix(hwnd)
+        else:
+            self._remove_centerfix()
+            self._remove_mouse_scale()
+            self._remove_borderless(hwnd)
+
+    def _apply_borderless(self, hwnd: int) -> bool:
+        user32 = ctypes.windll.user32
+        if hwnd in self._borderless_saved:
+            return True
+        style = user32.GetWindowLongA(hwnd, GWL_STYLE)
+        rect  = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        self._borderless_saved[hwnd] = (style, rect)
+        mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        mi  = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        user32.GetMonitorInfoA(mon, ctypes.byref(mi))
+        r = mi.rcMonitor
+        new_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
+                                WS_MAXIMIZEBOX | WS_SYSMENU)) | WS_POPUP
+        user32.SetWindowLongA(hwnd, GWL_STYLE, new_style)
+        user32.SetWindowPos(hwnd, 0, r.left, r.top,
+            r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_FRAMECHANGED)
+        user32.ClipCursor(None)
+        logger.info(f"[FF2] Borderless fullscreen {r.right - r.left}x{r.bottom - r.top}")
+        return True
+
+    def _remove_borderless(self, hwnd: int) -> None:
+        user32 = ctypes.windll.user32
+        if hwnd not in self._borderless_saved:
+            return
+        style, rect = self._borderless_saved.pop(hwnd)
+        user32.SetWindowLongA(hwnd, GWL_STYLE, style)
+        user32.SetWindowPos(hwnd, 0, rect.left, rect.top,
+            rect.right - rect.left, rect.bottom - rect.top,
+            SWP_NOZORDER | SWP_FRAMECHANGED)
+        logger.info("[FF2] Restored windowed mode")
+
+    def _install_mouse_scale(self, hwnd: int) -> None:
+        pm, base = self.pm, self.base
+        if self._mouse_cave is not None:
+            return
+        block = ctypes.windll.kernel32.VirtualAllocEx(
+            pm.process_handle, None, 128,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+        )
+        if not block:
+            logger.error(f"[FF2] scalemouse: alloc failed: {ctypes.windll.kernel32.GetLastError()}")
+            return
+        write_bytes(pm, block + 8, _build_mouse_cave(block, base))
+        site = base + WNDPROC_OFFSET
+        rel  = (block + 8 - (site + 5)) & 0xFFFFFFFF
+        write_bytes(pm, site, bytes([0xE9]) + struct.pack('<I', rel) + bytes([0x90]))
+        self._mouse_cave = block
+        self._update_mouse_scale(hwnd)
+        logger.info(f"[FF2] scalemouse: hook installed (cave=0x{block:08X})")
+
+    def _update_mouse_scale(self, hwnd: int) -> None:
+        if self._mouse_cave is None:
+            return
+        cw, ch = _client_size(hwnd)
+        if cw <= 0 or ch <= 0:
+            return
+        sx = max(1, round(800 * 65536 / cw))
+        sy = max(1, round(600 * 65536 / ch))
+        write_int(self.pm, self._mouse_cave + 0, sx)
+        write_int(self.pm, self._mouse_cave + 4, sy)
+        logger.info(f"[FF2] scalemouse: {cw}x{ch} -> 800x600 (sx={sx} sy={sy})")
+
+    def _remove_mouse_scale(self) -> None:
+        if self._mouse_cave is None:
+            return
+        write_bytes(self.pm, self.base + WNDPROC_OFFSET, WNDPROC_ORIGINAL)
+        ctypes.windll.kernel32.VirtualFreeEx(
+            self.pm.process_handle, ctypes.c_void_p(self._mouse_cave), 0, MEM_RELEASE,
+        )
+        self._mouse_cave = None
+        logger.info("[FF2] scalemouse: hook removed")
+
+    def _install_centerfix(self, hwnd: int) -> None:
+        pm, base = self.pm, self.base
+        if self._centerfix_cave is not None:
+            return
+        slot = base + IAT_SETCURSORPOS
+        if self._setcursorpos_real is None:
+            self._setcursorpos_real = read_int(pm, slot)
+        real = self._setcursorpos_real
+        cave = ctypes.windll.kernel32.VirtualAllocEx(
+            pm.process_handle, None, 128,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+        )
+        if not cave:
+            logger.error(f"[FF2] centerfix: alloc failed: {ctypes.windll.kernel32.GetLastError()}")
+            return
+        write_int(pm, cave + 8, real)
+        write_int(pm, cave + 12, 1)
+        write_bytes(pm, cave + 28, _build_centerfix_cave(cave))
+        old = wintypes.DWORD(0)
+        ctypes.windll.kernel32.VirtualProtectEx(
+            pm.process_handle, ctypes.c_void_p(slot), 4,
+            PAGE_EXECUTE_READWRITE, ctypes.byref(old),
+        )
+        write_int(pm, slot, cave + 28)
+        ctypes.windll.kernel32.VirtualProtectEx(
+            pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
+        )
+        got = read_int(pm, slot)
+        if got != (cave + 28) & 0xFFFFFFFF:
+            logger.error(f"[FF2] centerfix: IAT write FAILED (got=0x{got:08X})")
+        else:
+            logger.info(f"[FF2] centerfix: IAT repointed (slot 0x{slot:08X} -> 0x{cave+28:08X}, real=0x{real:08X})")
+        self._centerfix_cave = (cave, real)
+        self._update_centerfix(hwnd)
+
+    def _update_centerfix(self, hwnd: int) -> None:
+        if self._centerfix_cave is None:
+            return
+        cx, cy = _client_center_screen(hwnd)
+        cave = self._centerfix_cave[0]
+        write_int(self.pm, cave + 0, cx)
+        write_int(self.pm, cave + 4, cy)
+        logger.info(f"[FF2] centerfix: true client center = screen ({cx},{cy})")
+
+    def _remove_centerfix(self) -> None:
+        if self._centerfix_cave is None:
+            return
+        pm, base = self.pm, self.base
+        cave, real = self._centerfix_cave
+        slot = base + IAT_SETCURSORPOS
+        old  = wintypes.DWORD(0)
+        ctypes.windll.kernel32.VirtualProtectEx(
+            pm.process_handle, ctypes.c_void_p(slot), 4,
+            PAGE_EXECUTE_READWRITE, ctypes.byref(old),
+        )
+        write_int(pm, slot, real)
+        ctypes.windll.kernel32.VirtualProtectEx(
+            pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
+        )
+        got = read_int(pm, slot)
+        if got == real & 0xFFFFFFFF:
+            ctypes.windll.kernel32.VirtualFreeEx(
+                pm.process_handle, ctypes.c_void_p(cave), 0, MEM_RELEASE,
+            )
+        else:
+            logger.warning(f"[FF2] centerfix: restore verify failed (got=0x{got:08X})")
+        self._centerfix_cave = None
+        logger.info(f"[FF2] centerfix: restored (slot -> 0x{got:08X})")
+
 # ── Shuffle cave builder ──────────────────────────────────────────────────────
 
 def _build_shuffle_caves(table_addr: int):
@@ -1093,10 +1161,6 @@ def _build_shuffle_caves(table_addr: int):
 
 # ── Deathlink routine ───────────────────────────────────────────────────────────────
 def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
-    MEM_COMMIT             = 0x1000
-    MEM_RESERVE            = 0x2000
-    PAGE_EXECUTE_READWRITE = 0x40
-
     cave = ctypes.windll.kernel32.VirtualAllocEx(
         pm.process_handle, None, 64,
         MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
@@ -1180,6 +1244,10 @@ async def game_watcher(ctx: FF2Context):
         ctx._stable_level_id  = None
         ctx._stable_count     = 0
         ctx._shuffle_cave_addr = None   # old process memory is gone; reinstall on next ready
+        ctx._borderless_saved  = {}
+        ctx._mouse_cave        = None
+        ctx._centerfix_cave    = None
+        ctx._setcursorpos_real = None
 
         pm   = ctx.pm
         base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
@@ -1193,8 +1261,6 @@ async def game_watcher(ctx: FF2Context):
         ctx.base      = base
         ctx.game_ready = True
         logger.info("[FF2] Game ready. Watching for checks...")
-        make_window_resizable()
-        _start_proxy_window(ctx._stop_event)
 
         if ctx.level_shuffle:
             ctx._install_shuffle_hook(ctx.level_shuffle)
