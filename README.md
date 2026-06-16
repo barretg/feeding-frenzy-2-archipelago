@@ -2,6 +2,8 @@
 
 ## Items
 * Progressive Fish (allows  access to next area)
+* Dash (includes jump)
+* Suck
 * 1-up
 
 ## Locations
@@ -11,10 +13,11 @@
 ## Setup
 Just install as you would any other apworld (put in custom_worlds, or double click to install automatically), generate template yamls to get the yaml file if needed, have your host generate/host the game, and then do the following:
 
-1. Open FF2 to the title screen
+1. Open FF2 to the title screen.
 2. Create a new user. **This is very important:** The game will write over your save if you do not do this!
 3. Launch the feeding frenzy 2 client via the archipelago launcher (DO NOT start playing the game until you have connected. If you ever get disconnected, return to the title screen to reconnect, as important data is captured on initial loading).
-4. Connect to the server, and begin playing!
+4. (Optional) Type /fullscreen to go into borderless fullscreen mode.
+5. Connect to the server, and begin playing!
 
 If for whatever reason things don't work, restart both your game and the client and try again.
 
