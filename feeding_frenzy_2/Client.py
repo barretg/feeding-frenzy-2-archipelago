@@ -1252,13 +1252,13 @@ async def game_watcher(ctx: FF2Context):
         pm   = ctx.pm
         base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
         logger.info(f"[FF2] Base address: 0x{base:08X}")
+        ctx.base = base   # fixed exe offsets (fullscreen/scalemouse/centerfix) are valid immediately
 
         ctx.level_obj = await loop.run_in_executor(None, capture_level_object, pm, base)
         if not ctx.level_obj:
             logger.error("[FF2] Failed to capture level object.")
             continue
 
-        ctx.base      = base
         ctx.game_ready = True
         logger.info("[FF2] Game ready. Watching for checks...")
 
