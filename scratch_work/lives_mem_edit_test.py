@@ -661,8 +661,8 @@ def install_mouse_scale(pm, base):
     if not hwnd:
         print("  [mscale] game window not found"); return
     if _logical_wh[0] is None:
-        _logical_wh[0] = _client_size(hwnd)
-        print(f"  [mscale] logical canvas captured = {_logical_wh[0][0]}x{_logical_wh[0][1]}")
+        _logical_wh[0] = (800, 600)
+        print(f"  [mscale] using game virtual canvas 800x600")
     if _mouse_cave[0] is None:
         block = ctypes.windll.kernel32.VirtualAllocEx(
             pm.process_handle, None, 128,
@@ -711,16 +711,26 @@ def remove_mouse_scale(pm, base):
 
 def _build_centerfix_cave(cave):
     """SetCursorPos replacement. stdcall(x,y): [esp]=ret [esp+4]=x [esp+8]=y.
-    If enabled, overwrite the args with the stored true client center, then tail-
-    jump to the real SetCursorPos (which does the ret 8 back to the caller)."""
+    Cave layout: [+0]=screenX [+4]=screenY [+8]=real SetCursorPos [+12]=enable
+                 [+20]=last_orig_x [+24]=last_orig_y  code@+28.
+    Always saves original args to +20/+24 for diagnostic.
+    If enabled, overwrite args with stored true client center, then tail-jump."""
     code = bytearray()
+    # always log the original args the game passed
+    code += bytes([0x8B, 0x44, 0x24, 0x04])                   # mov eax,[esp+4]   (orig x)
+    code += bytes([0xA3]) + struct.pack('<I', cave + 20)       # mov [cave+20],eax
+    code += bytes([0x8B, 0x44, 0x24, 0x08])                   # mov eax,[esp+8]   (orig y)
+    code += bytes([0xA3]) + struct.pack('<I', cave + 24)       # mov [cave+24],eax
+    # check enable flag
     code += bytes([0x83, 0x3D]) + struct.pack('<I', cave + 12) + bytes([0x00])  # cmp [enable],0
-    code += bytes([0x74, 18])                       # je .pass  (skip 18 bytes)
+    code += bytes([0x74, 18])                       # je .pass  (skip 18 bytes of override)
+    # override: replace args with our computed center
     code += bytes([0xA1]) + struct.pack('<I', cave + 0)        # mov eax,[screenX]
-    code += bytes([0x89, 0x44, 0x24, 0x04])         # mov [esp+4],eax
+    code += bytes([0x89, 0x44, 0x24, 0x04])                   # mov [esp+4],eax
     code += bytes([0xA1]) + struct.pack('<I', cave + 4)        # mov eax,[screenY]
-    code += bytes([0x89, 0x44, 0x24, 0x08])         # mov [esp+8],eax
-    code += bytes([0xFF, 0x25]) + struct.pack('<I', cave + 8)  # .pass: jmp [real]
+    code += bytes([0x89, 0x44, 0x24, 0x08])                   # mov [esp+8],eax
+    # .pass:
+    code += bytes([0xFF, 0x25]) + struct.pack('<I', cave + 8)  # jmp [real]
     return bytes(code)
 
 
@@ -734,7 +744,7 @@ def install_centerfix(pm, base):
         _setcursorpos_real[0] = read_int(pm, slot)
     real = _setcursorpos_real[0]
     cave = ctypes.windll.kernel32.VirtualAllocEx(
-        pm.process_handle, None, 64,
+        pm.process_handle, None, 128,
         MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
     )
     if not cave:
@@ -742,7 +752,8 @@ def install_centerfix(pm, base):
         return
     write_int(pm, cave + 8, real)        # real SetCursorPos
     write_int(pm, cave + 12, 1)          # enable
-    write_bytes(pm, cave + 16, _build_centerfix_cave(cave))
+    # cave+20/+24 = last_orig_x/y (written by cave code, read via cfdbg)
+    write_bytes(pm, cave + 28, _build_centerfix_cave(cave))  # code at +28 (after data region)
 
     # IAT may be a read-only section — force the page writable before repointing
     old = wintypes.DWORD(0)
@@ -750,16 +761,16 @@ def install_centerfix(pm, base):
         pm.process_handle, ctypes.c_void_p(slot), 4,
         PAGE_EXECUTE_READWRITE, ctypes.byref(old),
     )
-    write_int(pm, slot, cave + 16)       # repoint IAT -> cave code
+    write_int(pm, slot, cave + 28)       # repoint IAT -> cave code
     ctypes.windll.kernel32.VirtualProtectEx(
         pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
     )
 
     got = read_int(pm, slot)
-    if got != (cave + 16) & 0xFFFFFFFF:
-        print(f"  [centerfix] !! IAT write FAILED — slot=0x{got:08X} expected 0x{cave + 16:08X}")
+    if got != (cave + 28) & 0xFFFFFFFF:
+        print(f"  [centerfix] !! IAT write FAILED — slot=0x{got:08X} expected 0x{cave + 28:08X}")
     else:
-        print(f"  [centerfix] IAT repointed OK (slot 0x{slot:08X} -> 0x{cave + 16:08X}, real=0x{real:08X})")
+        print(f"  [centerfix] IAT repointed OK (slot 0x{slot:08X} -> 0x{cave + 28:08X}, real=0x{real:08X})")
     _centerfix_cave[0] = (cave, real)
     update_centerfix(pm)
 
@@ -1243,6 +1254,7 @@ def print_help():
     print("  borderless          - toggle borderless fullscreen (no res change)")
     print("  scalemouse          - toggle mouse-coordinate rescale hook")
     print("  centerfix           - toggle gameplay relative-input center fix")
+    print("  cfdbg               - print original SetCursorPos args the game sent (requires centerfix)")
     print("  nodash              - block dash (applied on startup)")
     print("  dash                - unblock dash (simulate receiving Dash item)")
     print("  nosuck              - block suck (applied on startup)")
@@ -1276,11 +1288,11 @@ def main():
     patch_suck_block(pm, base)
     make_window_resizable()
 
-    # capture native canvas size while still windowed (basis for mouse rescale)
+    # game's virtual canvas is 800x600 regardless of window chrome / physical size
+    _logical_wh[0] = (800, 600)
     _hwnd = _game_hwnd()
     if _hwnd:
-        _logical_wh[0] = _client_size(_hwnd)
-        print(f"  [mscale] native canvas = {_logical_wh[0][0]}x{_logical_wh[0][1]}")
+        print(f"  [mscale] game virtual canvas = 800x600 (client={_client_size(_hwnd)[0]}x{_client_size(_hwnd)[1]})")
 
     session = DebugSession(pm)
     session.start()
@@ -1471,6 +1483,17 @@ def main():
                 install_centerfix(pm, base)
             else:
                 remove_centerfix(pm, base)
+
+        elif cmd == "cfdbg":
+            if _centerfix_cave[0] is None:
+                print("  [cfdbg] centerfix not installed")
+            else:
+                cave = _centerfix_cave[0][0]
+                ox = read_int(pm, cave + 20)
+                oy = read_int(pm, cave + 24)
+                cx = read_int(pm, cave + 0)
+                cy = read_int(pm, cave + 4)
+                print(f"  [cfdbg] game requested SetCursorPos({ox}, {oy})  our park=({cx},{cy})")
 
         elif cmd == "nodash":
             patch_dash_block(pm, base)
