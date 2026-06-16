@@ -484,10 +484,64 @@ def write_bytes(pm, address, data):
 GWL_STYLE        = -16
 WS_THICKFRAME    = 0x00040000
 WS_MAXIMIZEBOX   = 0x00010000
+WS_MINIMIZEBOX   = 0x00020000
+WS_CAPTION       = 0x00C00000
+WS_SYSMENU       = 0x00080000
+WS_POPUP         = 0x80000000
 SWP_NOMOVE       = 0x0002
 SWP_NOSIZE       = 0x0001
 SWP_NOZORDER     = 0x0004
 SWP_FRAMECHANGED = 0x0020
+MONITOR_DEFAULTTONEAREST = 0x0002
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",    wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork",    wintypes.RECT),
+        ("dwFlags",   wintypes.DWORD),
+    ]
+
+# saved window state for borderless toggle: hwnd -> (style, RECT)
+_borderless_saved = {}
+
+# ── Mouse-coordinate rescale hook ─────────────────────────────────────────────
+# The PopCap framework stretch-blits its native canvas to the full window client
+# rect, but hit-tests mouse messages in raw client-pixel space against native
+# layout rects. Borderless fullscreen therefore renders icons scaled up while
+# their click boxes stay at native positions. This hook rewrites lParam of every
+# mouse message (0x200-0x209) at WndProc entry, mapping client px -> native px in
+# 16.16 fixed point. Scale factors live in the cave (block+0, block+4) and are
+# updated from Python whenever the window size changes — self-correcting.
+WNDPROC_OFFSET   = 0x24780
+WNDPROC_RET_OFF  = 0x24786                       # resume after stolen prologue
+WNDPROC_ORIGINAL = bytes([0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8])  # push ebp; mov ebp,esp; and esp,-8
+
+_logical_wh = [None]   # (w, h) native canvas, captured while windowed
+_mouse_cave = [None]   # base of allocated cave block, or None
+
+# ── Relative-input center fix (SetCursorPos IAT redirect) ─────────────────────
+# Gameplay recenters the cursor every frame to the native canvas center
+# (~400,300) via SetCursorPos. With scalemouse active, that parked position is
+# scaled back to ~(167,125), so the resting delta from the canvas center is a
+# constant negative and the fish runs to a corner. Fix: repoint the SetCursorPos
+# IAT slot to a cave that forces the target to the TRUE client center (in screen
+# coords). Then the parked cursor scales back exactly to the canvas center ->
+# delta 0. Must be used together with scalemouse + borderless.
+IAT_SETCURSORPOS = 0x146280                      # 0x546280 - image base
+
+# cave layout: [+0]=screenX  [+4]=screenY  [+8]=real SetCursorPos  [+12]=enable  code@+16
+_centerfix_cave = [None]      # (cave_base, real_addr) or None
+_setcursorpos_real = [None]   # cached genuine SetCursorPos addr (survives toggles)
+
+
+def _client_center_screen(hwnd):
+    user32 = ctypes.windll.user32
+    r = wintypes.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(r))
+    pt = wintypes.POINT(r.right // 2, r.bottom // 2)
+    user32.ClientToScreen(hwnd, ctypes.byref(pt))
+    return pt.x, pt.y
 
 def make_window_resizable():
     hwnd = ctypes.windll.user32.FindWindowA(b"Gatsu", None)
@@ -502,6 +556,251 @@ def make_window_resizable():
     ctypes.windll.user32.ClipCursor(None)
     print(f"  [window] Resizable, cursor unclipped (hwnd=0x{hwnd:08X})")
     return True
+
+
+def toggle_borderless():
+    """Borderless windowed fullscreen on the game window — covers the monitor,
+    strips the frame, does NOT change the monitor resolution. Toggles back to
+    the previous windowed style/position on second call."""
+    user32 = ctypes.windll.user32
+    hwnd   = user32.FindWindowA(b"Gatsu", None)
+    if not hwnd:
+        print("  [window] Game window not found (is it running?)")
+        return False
+
+    if hwnd in _borderless_saved:
+        style, rect = _borderless_saved.pop(hwnd)
+        user32.SetWindowLongA(hwnd, GWL_STYLE, style)
+        user32.SetWindowPos(hwnd, 0, rect.left, rect.top,
+            rect.right - rect.left, rect.bottom - rect.top,
+            SWP_NOZORDER | SWP_FRAMECHANGED)
+        print(f"  [window] Restored windowed (hwnd=0x{hwnd:08X})")
+        return True
+
+    style = user32.GetWindowLongA(hwnd, GWL_STYLE)
+    rect  = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    _borderless_saved[hwnd] = (style, rect)
+
+    mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+    mi  = MONITORINFO()
+    mi.cbSize = ctypes.sizeof(MONITORINFO)
+    user32.GetMonitorInfoA(mon, ctypes.byref(mi))
+    r = mi.rcMonitor
+
+    new_style = (style & ~(WS_CAPTION | WS_THICKFRAME |
+                           WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU)) | WS_POPUP
+    user32.SetWindowLongA(hwnd, GWL_STYLE, new_style)
+    user32.SetWindowPos(hwnd, 0, r.left, r.top,
+        r.right - r.left, r.bottom - r.top,
+        SWP_NOZORDER | SWP_FRAMECHANGED)
+    user32.ClipCursor(None)
+    print(f"  [window] Borderless fullscreen {r.right - r.left}x{r.bottom - r.top} "
+          f"(hwnd=0x{hwnd:08X})")
+    return True
+
+
+def _game_hwnd():
+    return ctypes.windll.user32.FindWindowA(b"Gatsu", None)
+
+
+def _client_size(hwnd):
+    r = wintypes.RECT()
+    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(r))
+    return r.right, r.bottom
+
+
+def _build_mouse_cave(block, base):
+    """Assemble the mouse-rescale cave. Layout: [block+0]=sx (16.16), [block+4]=sy,
+    code at block+8. Hooked from WndProc entry; runs the stolen prologue and jumps
+    back to WNDPROC_RET_OFF."""
+    sx_addr = block + 0
+    sy_addr = block + 4
+
+    work = bytearray()
+    work += bytes([0x0F, 0xBF, 0x45, 0x14])               # movsx eax,word [ebp+14]   ; X
+    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sx_addr)  # imul eax,[sx]
+    work += bytes([0xC1, 0xF8, 0x10])                     # sar eax,16
+    work += bytes([0x0F, 0xB7, 0xD0])                     # movzx edx,ax              ; X'
+    work += bytes([0x52])                                 # push edx
+    work += bytes([0x8B, 0x45, 0x14])                     # mov eax,[ebp+14]
+    work += bytes([0xC1, 0xF8, 0x10])                     # sar eax,16                ; Y
+    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sy_addr)  # imul eax,[sy]
+    work += bytes([0xC1, 0xF8, 0x10])                     # sar eax,16                ; Y'
+    work += bytes([0xC1, 0xE0, 0x10])                     # shl eax,16
+    work += bytes([0x5A])                                 # pop edx                   ; X'
+    work += bytes([0x0F, 0xB7, 0xD2])                     # movzx edx,dx
+    work += bytes([0x09, 0xD0])                           # or eax,edx
+    work += bytes([0x89, 0x45, 0x14])                     # mov [ebp+14],eax          ; lParam'
+
+    code = bytearray()
+    code += bytes([0x55])                                 # push ebp
+    code += bytes([0x8B, 0xEC])                           # mov ebp,esp
+    code += bytes([0x50])                                 # push eax
+    code += bytes([0x52])                                 # push edx
+    code += bytes([0x8B, 0x45, 0x0C])                     # mov eax,[ebp+0C]          ; msg
+    code += bytes([0x2D, 0x00, 0x02, 0x00, 0x00])         # sub eax,200
+    code += bytes([0x83, 0xF8, 0x09])                     # cmp eax,9
+    code += bytes([0x77, len(work)])                      # ja .restore  (skip if not 200..209)
+    code += work
+    code += bytes([0x5A])                                 # pop edx        (.restore)
+    code += bytes([0x58])                                 # pop eax
+    code += bytes([0x5D])                                 # pop ebp
+    code += bytes([0x55])                                 # push ebp           (stolen)
+    code += bytes([0x8B, 0xEC])                           # mov ebp,esp        (stolen)
+    code += bytes([0x83, 0xE4, 0xF8])                     # and esp,FFFFFFF8   (stolen)
+    jmp_pos  = block + 8 + len(code)
+    ret_addr = base + WNDPROC_RET_OFF
+    rel      = (ret_addr - (jmp_pos + 5)) & 0xFFFFFFFF
+    code += bytes([0xE9]) + struct.pack('<I', rel)        # jmp WNDPROC_RET_OFF
+    return bytes(code)
+
+
+def install_mouse_scale(pm, base):
+    hwnd = _game_hwnd()
+    if not hwnd:
+        print("  [mscale] game window not found"); return
+    if _logical_wh[0] is None:
+        _logical_wh[0] = _client_size(hwnd)
+        print(f"  [mscale] logical canvas captured = {_logical_wh[0][0]}x{_logical_wh[0][1]}")
+    if _mouse_cave[0] is None:
+        block = ctypes.windll.kernel32.VirtualAllocEx(
+            pm.process_handle, None, 128,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+        )
+        if not block:
+            print(f"  [mscale] VirtualAllocEx failed: {ctypes.windll.kernel32.GetLastError()}")
+            return
+        write_bytes(pm, block + 8, _build_mouse_cave(block, base))
+        site = base + WNDPROC_OFFSET
+        rel  = (block + 8 - (site + 5)) & 0xFFFFFFFF
+        write_bytes(pm, site, bytes([0xE9]) + struct.pack('<I', rel) + bytes([0x90]))
+        _mouse_cave[0] = block
+        print(f"  [mscale] hook installed (cave=0x{block:08X}  site=0x{site:08X})")
+    update_mouse_scale(pm)
+
+
+def update_mouse_scale(pm):
+    if _mouse_cave[0] is None or _logical_wh[0] is None:
+        return
+    hwnd = _game_hwnd()
+    if not hwnd:
+        return
+    cw, ch = _client_size(hwnd)
+    lw, lh = _logical_wh[0]
+    if cw <= 0 or ch <= 0:
+        return
+    sx = max(1, round(lw * 65536 / cw))
+    sy = max(1, round(lh * 65536 / ch))
+    write_int(pm, _mouse_cave[0] + 0, sx)
+    write_int(pm, _mouse_cave[0] + 4, sy)
+    print(f"  [mscale] client {cw}x{ch} -> canvas {lw}x{lh}  (sx={sx} sy={sy}, "
+          f"{'1:1' if sx == 65536 and sy == 65536 else 'scaled'})")
+
+
+def remove_mouse_scale(pm, base):
+    if _mouse_cave[0] is None:
+        print("  [mscale] not installed"); return
+    write_bytes(pm, base + WNDPROC_OFFSET, WNDPROC_ORIGINAL)
+    ctypes.windll.kernel32.VirtualFreeEx(
+        pm.process_handle, ctypes.c_void_p(_mouse_cave[0]), 0, MEM_RELEASE,
+    )
+    _mouse_cave[0] = None
+    print("  [mscale] hook removed, WndProc restored")
+
+
+def _build_centerfix_cave(cave):
+    """SetCursorPos replacement. stdcall(x,y): [esp]=ret [esp+4]=x [esp+8]=y.
+    If enabled, overwrite the args with the stored true client center, then tail-
+    jump to the real SetCursorPos (which does the ret 8 back to the caller)."""
+    code = bytearray()
+    code += bytes([0x83, 0x3D]) + struct.pack('<I', cave + 12) + bytes([0x00])  # cmp [enable],0
+    code += bytes([0x74, 18])                       # je .pass  (skip 18 bytes)
+    code += bytes([0xA1]) + struct.pack('<I', cave + 0)        # mov eax,[screenX]
+    code += bytes([0x89, 0x44, 0x24, 0x04])         # mov [esp+4],eax
+    code += bytes([0xA1]) + struct.pack('<I', cave + 4)        # mov eax,[screenY]
+    code += bytes([0x89, 0x44, 0x24, 0x08])         # mov [esp+8],eax
+    code += bytes([0xFF, 0x25]) + struct.pack('<I', cave + 8)  # .pass: jmp [real]
+    return bytes(code)
+
+
+def install_centerfix(pm, base):
+    if _centerfix_cave[0] is not None:
+        print("  [centerfix] already installed"); return
+    slot = base + IAT_SETCURSORPOS
+    # cache the genuine address on first (clean) install; reuse it forever after,
+    # so a previously-corrupted slot can never poison the tail-jump target.
+    if _setcursorpos_real[0] is None:
+        _setcursorpos_real[0] = read_int(pm, slot)
+    real = _setcursorpos_real[0]
+    cave = ctypes.windll.kernel32.VirtualAllocEx(
+        pm.process_handle, None, 64,
+        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+    )
+    if not cave:
+        print(f"  [centerfix] VirtualAllocEx failed: {ctypes.windll.kernel32.GetLastError()}")
+        return
+    write_int(pm, cave + 8, real)        # real SetCursorPos
+    write_int(pm, cave + 12, 1)          # enable
+    write_bytes(pm, cave + 16, _build_centerfix_cave(cave))
+
+    # IAT may be a read-only section — force the page writable before repointing
+    old = wintypes.DWORD(0)
+    ctypes.windll.kernel32.VirtualProtectEx(
+        pm.process_handle, ctypes.c_void_p(slot), 4,
+        PAGE_EXECUTE_READWRITE, ctypes.byref(old),
+    )
+    write_int(pm, slot, cave + 16)       # repoint IAT -> cave code
+    ctypes.windll.kernel32.VirtualProtectEx(
+        pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
+    )
+
+    got = read_int(pm, slot)
+    if got != (cave + 16) & 0xFFFFFFFF:
+        print(f"  [centerfix] !! IAT write FAILED — slot=0x{got:08X} expected 0x{cave + 16:08X}")
+    else:
+        print(f"  [centerfix] IAT repointed OK (slot 0x{slot:08X} -> 0x{cave + 16:08X}, real=0x{real:08X})")
+    _centerfix_cave[0] = (cave, real)
+    update_centerfix(pm)
+
+
+def update_centerfix(pm):
+    if _centerfix_cave[0] is None:
+        return
+    hwnd = _game_hwnd()
+    if not hwnd:
+        return
+    cx, cy = _client_center_screen(hwnd)
+    cave   = _centerfix_cave[0][0]
+    write_int(pm, cave + 0, cx)
+    write_int(pm, cave + 4, cy)
+    print(f"  [centerfix] true client center = screen ({cx},{cy})")
+
+
+def remove_centerfix(pm, base):
+    if _centerfix_cave[0] is None:
+        print("  [centerfix] not installed"); return
+    cave, real = _centerfix_cave[0]
+    slot = base + IAT_SETCURSORPOS
+    old  = wintypes.DWORD(0)
+    ctypes.windll.kernel32.VirtualProtectEx(
+        pm.process_handle, ctypes.c_void_p(slot), 4,
+        PAGE_EXECUTE_READWRITE, ctypes.byref(old),
+    )
+    write_int(pm, slot, real)                       # restore IAT
+    ctypes.windll.kernel32.VirtualProtectEx(
+        pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
+    )
+    got = read_int(pm, slot)
+    if got != real & 0xFFFFFFFF:
+        print(f"  [centerfix] !! restore FAILED — slot=0x{got:08X} expected 0x{real:08X}")
+    # free the cave only after the slot no longer points into it
+    if got == real & 0xFFFFFFFF:
+        ctypes.windll.kernel32.VirtualFreeEx(
+            pm.process_handle, ctypes.c_void_p(cave), 0, MEM_RELEASE,
+        )
+    _centerfix_cave[0] = None
+    print(f"  [centerfix] SetCursorPos restored (slot 0x{slot:08X} -> 0x{got:08X})")
 
 
 def patch_dash_block(pm, base):
@@ -941,6 +1240,9 @@ def print_help():
     print("    items: life, fish")
     print("  die [delay]         - trigger player death (optionally after delay seconds)")
     print("  resize              - make game window resizable (applied on startup)")
+    print("  borderless          - toggle borderless fullscreen (no res change)")
+    print("  scalemouse          - toggle mouse-coordinate rescale hook")
+    print("  centerfix           - toggle gameplay relative-input center fix")
     print("  nodash              - block dash (applied on startup)")
     print("  dash                - unblock dash (simulate receiving Dash item)")
     print("  nosuck              - block suck (applied on startup)")
@@ -970,10 +1272,15 @@ def main():
 
     stop_event     = threading.Event()
 
-    patch_focus_pause(pm, base)
     patch_dash_block(pm, base)
     patch_suck_block(pm, base)
     make_window_resizable()
+
+    # capture native canvas size while still windowed (basis for mouse rescale)
+    _hwnd = _game_hwnd()
+    if _hwnd:
+        _logical_wh[0] = _client_size(_hwnd)
+        print(f"  [mscale] native canvas = {_logical_wh[0][0]}x{_logical_wh[0][1]}")
 
     session = DebugSession(pm)
     session.start()
@@ -1147,6 +1454,23 @@ def main():
 
         elif cmd == "resize":
             make_window_resizable()
+
+        elif cmd in ("borderless", "fs"):
+            toggle_borderless()
+            update_mouse_scale(pm)   # refresh scale for the new client size
+            update_centerfix(pm)     # refresh recenter target for the new size
+
+        elif cmd in ("scalemouse", "mscale"):
+            if _mouse_cave[0] is None:
+                install_mouse_scale(pm, base)
+            else:
+                remove_mouse_scale(pm, base)
+
+        elif cmd == "centerfix":
+            if _centerfix_cave[0] is None:
+                install_centerfix(pm, base)
+            else:
+                remove_centerfix(pm, base)
 
         elif cmd == "nodash":
             patch_dash_block(pm, base)
