@@ -102,10 +102,10 @@ class FF2World(World):
         goal_region = Region("Goal", self.player, self.multiworld)
         self.multiworld.regions.append(goal_region)
 
-        # Menu → Zone 0 (free)
+        # Menu -> Zone 0 (free)
         menu_region.connect(zone_regions[0])
 
-        # Zone N → Zone N+1 (requires N+1 fish)
+        # Zone N -> Zone N+1 (requires N+1 fish)
         for zone_idx in range(len(ZONE_BOUNDARIES) - 1):
             fish_needed = zone_idx + 1
             zone_regions[zone_idx].connect(
@@ -114,7 +114,7 @@ class FF2World(World):
                     state.has("Progressive Fish", self.player, n)
             )
 
-        # Final zone → Goal (requires all 10 fish)
+        # Final zone -> Goal (requires all 10 fish)
         zone_regions[-1].connect(
             goal_region,
             rule=lambda state:
@@ -123,7 +123,7 @@ class FF2World(World):
 
         # Place locations into zone regions.
         # With level shuffle the accessibility of each location depends on which
-        # map slot holds that content, so we map content → slot to find its zone.
+        # map slot holds that content, so we map content -> slot to find its zone.
         content_to_slot: List[int] = [0] * 60
         for slot, content in enumerate(self.level_shuffle):
             content_to_slot[content] = slot
@@ -136,6 +136,8 @@ class FF2World(World):
                 self.player, loc_name, loc_data.code, zone_region
             )
             zone_region.locations.append(location)
+            if loc_data.level_id == 57:
+                location.access_rule = lambda state: state.has("Dash", self.player)
 
         # Victory event
         victory_location = FF2Location(self.player, "Final Boss", None, goal_region)
