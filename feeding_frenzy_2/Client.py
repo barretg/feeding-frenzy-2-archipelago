@@ -252,7 +252,7 @@ def write_bytes(pm: pymem.Pymem, address: int, data: bytes) -> None:
 
 
 def write_int(pm: pymem.Pymem, address: int, value: int) -> None:
-    buf     = value.to_bytes(4, byteorder="little")
+    buf     = (value & 0xFFFFFFFF).to_bytes(4, byteorder="little")
     written = ctypes.c_size_t(0)
     ctypes.windll.kernel32.WriteProcessMemory(
         pm.process_handle,
