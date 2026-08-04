@@ -10,6 +10,7 @@
 
 #include "MinHook.h"
 #include "../ipc.h"
+#include "../state.h"
 
 // Struct offsets from Client.py (OFFSET_* constants) — level_obj is the same persistent
 // object across the whole session, reused in place on every level (re)load, not
@@ -30,7 +31,9 @@ constexpr int OFFSET_PROGRESS       = 0x40;
 constexpr auto kPollInterval = std::chrono::milliseconds(2);
 
 void* g_original = nullptr;
-std::atomic<uintptr_t> g_level_obj{0};
+// Plain-identifier alias so the inline __asm block below can reference it directly —
+// MSVC's inline assembler doesn't reliably parse qualified names like state::g_level_obj.
+using state::g_level_obj;
 
 inline int32_t Read(uintptr_t addr) {
     return *reinterpret_cast<volatile int32_t*>(addr);
@@ -51,10 +54,24 @@ __declspec(naked) void Detour_LevelInit() {
 }
 
 void PollLoop() {
+    // TODO(Phase 2 step 2 verification): remove once player_fish/sub_object are wired
+    // into something with its own live confirmation (DeathLink) — this only exists to
+    // prove the capture hook fires without flooding the log on every call.
+    intptr_t last_logged_fish = 0;
+
     for (;;) {
         std::this_thread::sleep_for(kPollInterval);
 
-        const uintptr_t obj = g_level_obj.load(std::memory_order_relaxed);
+        const intptr_t fish = state::g_player_fish;
+        if (fish != last_logged_fish) {
+            last_logged_fish = fish;
+            char buf[128];
+            wsprintfA(buf, "player_fish captured: 0x%08X sub_object: 0x%08X",
+                      static_cast<unsigned int>(fish), static_cast<unsigned int>(state::g_sub_object));
+            ipc::Log(buf);
+        }
+
+        const uintptr_t obj = static_cast<uintptr_t>(g_level_obj);
         if (!obj) {
             continue;
         }

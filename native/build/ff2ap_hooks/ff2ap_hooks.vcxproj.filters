@@ -7,10 +7,16 @@
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\ipc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boundary_gate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\level_guard.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\player_fish.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

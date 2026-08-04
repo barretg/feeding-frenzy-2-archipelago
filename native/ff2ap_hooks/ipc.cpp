@@ -7,6 +7,7 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -20,6 +21,11 @@ std::mutex g_send_mutex;
 std::condition_variable g_send_cv;
 std::deque<std::string> g_send_queue;
 
+// Only ever appended to during startup (each hook module's Install* call, all on the
+// same DllMain worker thread, before Init() starts the receive thread that reads this) —
+// no lock needed for that ordering, but see Init()'s comment.
+std::vector<LineHandler> g_handlers;
+
 void HandleLine(const std::string& line) {
     if (line.rfind("ALLOWED_MAX ", 0) == 0) {
         try {
@@ -27,6 +33,10 @@ void HandleLine(const std::string& line) {
         } catch (...) {
             // malformed line — ignore, keep the previous value
         }
+        return;
+    }
+    for (const auto& handler : g_handlers) {
+        handler(line);
     }
 }
 
@@ -118,6 +128,14 @@ void QueueSend(const std::string& line) {
         g_send_queue.push_back(line);
     }
     g_send_cv.notify_all();
+}
+
+void Log(const std::string& msg) {
+    QueueSend("LOG " + msg);
+}
+
+void RegisterHandler(LineHandler handler) {
+    g_handlers.push_back(std::move(handler));
 }
 
 }  // namespace ipc

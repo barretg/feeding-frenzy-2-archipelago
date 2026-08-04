@@ -4,6 +4,7 @@
 #include "ipc.h"
 #include "hooks/boundary_gate.h"
 #include "hooks/level_guard.h"
+#include "hooks/player_fish.h"
 
 namespace {
 
@@ -13,6 +14,7 @@ DWORD WINAPI WorkerThread(LPVOID) {
     }
     hooks::InstallBoundaryGate();
     hooks::InstallLevelGuard();
+    hooks::InstallPlayerFish();
     ipc::Init();  // background connect/receive loop; never returns
     return 0;
 }

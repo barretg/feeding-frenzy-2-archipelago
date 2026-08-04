@@ -992,6 +992,9 @@ class FF2Context(CommonContext):
 
     def _handle_native_line(self, line: str) -> None:
         line = line.strip()
+        if line.startswith("LOG "):
+            logger.info(f"[FF2-native] {line[4:]}")
+            return
         if not line.startswith("LEVEL_COMPLETE "):
             return
         try:
