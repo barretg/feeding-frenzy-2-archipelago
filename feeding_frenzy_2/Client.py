@@ -608,29 +608,44 @@ def _ensure_native_hooks_installed(game_dir: Path) -> None:
             logger.warning("[FF2] Could not find system dsound.dll to copy as dsound_real.dll")
 
 
+def _valid_game_directory(path) -> Optional[Path]:
+    if not path:
+        return None
+    p = Path(str(path))
+    return p if (p / PROCESS_NAME).exists() else None
+
+
 def _get_game_directory() -> Optional[Path]:
     configured = get_settings()["feeding_frenzy_2_options"]["game_directory"]
-    if configured and Path(configured).exists():
-        return Path(configured)
-    return None
+    return _valid_game_directory(configured)
 
 
 def _pick_game_directory() -> Optional[Path]:
-    ff2_settings = get_settings()["feeding_frenzy_2_options"]
-    chosen = ff2_settings["game_directory"].browse()
+    # Browse from a fresh instance of the settings Path type rather than whatever's
+    # currently stored — settings.py's Group.__getattribute__ only re-wraps a value
+    # into its typed Path subclass (the thing .browse() lives on) if it's still a Path
+    # instance; a prior save could have degraded it to a plain str (see below), which
+    # would make ff2_settings["game_directory"].browse() blow up here. Browsing from a
+    # fresh instance sidesteps that regardless of what's currently on disk.
+    from . import FF2Settings
+    chosen = FF2Settings.GameDirectory("").browse()
     if not chosen:
         return None
-    ff2_settings["game_directory"] = str(chosen)
+    # Keep the value's own Path subclass (what .browse() returns) rather than
+    # coercing to a plain str — storing a bare str here is what breaks .browse() on
+    # the next prompt in the first place.
+    get_settings()["feeding_frenzy_2_options"]["game_directory"] = chosen
     get_settings().save()
-    return Path(chosen)
+    return _valid_game_directory(chosen)
 
 
 def launch_game() -> None:
     game_dir = _get_game_directory()
-    if game_dir is None or not (game_dir / PROCESS_NAME).exists():
+    if game_dir is None:
         game_dir = _pick_game_directory()
-        if game_dir is None or not (game_dir / PROCESS_NAME).exists():
-            logger.warning("[FF2] No valid Feeding Frenzy 2 install directory selected.")
+        if game_dir is None:
+            logger.warning("[FF2] No valid Feeding Frenzy 2 install directory selected "
+                            f"(must contain {PROCESS_NAME}).")
             return
 
     _ensure_native_hooks_installed(game_dir)
