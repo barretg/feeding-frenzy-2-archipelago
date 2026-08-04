@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="F:\Feeding Frenzy 2 Archipelago\native\build\CMakeFiles\868a7d018f824a0ba97dd5fd417827de\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{DA33F1B9-D6CD-31C4-9B30-51766A5EE532}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

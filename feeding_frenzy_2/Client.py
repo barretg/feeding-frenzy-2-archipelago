@@ -6,9 +6,13 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import ctypes.wintypes as wintypes
+import os
+import shutil
 import struct
+import subprocess
 import sys
 import threading
+from pathlib import Path
 from typing import List, Optional
 
 import pymem
@@ -16,6 +20,7 @@ import pymem.process
 
 import Utils
 from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandProcessor, logger, get_base_parser
+from settings import get_settings
 
 GAME_NAME    = "Feeding Frenzy 2"
 PROCESS_NAME = "popcapgame1.exe"
@@ -59,6 +64,13 @@ ITEM_PROGRESSIVE_FISH = 0xFF20000 + 1
 ITEM_1UP              = 0xFF20000 + 2
 ITEM_DASH             = 0xFF20000 + 3
 ITEM_SUCK             = 0xFF20000 + 4
+
+# ── Native hook IPC (ff2ap_hooks.dll, injected via the dsound.dll proxy) ──────
+# Loopback TCP, newline-delimited text — must match native/ff2ap_hooks/ipc.h.
+NATIVE_IPC_HOST  = "127.0.0.1"
+NATIVE_IPC_PORT  = 39270
+NATIVE_DLL_NAMES = ("dsound.dll", "ff2ap_hooks.dll")
+GAME_EXE_NAME    = "FeedingFrenzy2.exe"  # real entry point; spawns popcapgame1.exe itself
 
 # ── Dash ability patch ────────────────────────────────────────────────────────
 # Patch the call site at 0x004248AD (WM_LBUTTONDOWN handler) to NOP.
@@ -562,6 +574,75 @@ def reset_to_boundary_level(pm: pymem.Pymem, level_obj: int) -> None:
     logger.info(f"[FF2] Boundary reached — resetting to level {current_level} replay")
 
 
+# ── Native hook install / launch ──────────────────────────────────────────────
+# The boundary gate now also runs synchronously in-process (ff2ap_hooks.dll,
+# loaded via a dsound.dll search-order proxy — see native/). The functions above
+# stay in place as a reactive backstop; this is the primary enforcement path.
+
+def _native_package_dir() -> Path:
+    return Path(__file__).parent / "native"
+
+
+def _ensure_native_hooks_installed(game_dir: Path) -> None:
+    """Copy the bundled proxy/payload DLLs (and a local copy of the real system
+    dsound.dll for the proxy to forward to) into the game's install directory,
+    if missing or older than what's bundled in this apworld."""
+    src_dir = _native_package_dir()
+    for name in NATIVE_DLL_NAMES:
+        src = src_dir / name
+        dst = game_dir / name
+        if not src.exists():
+            logger.warning(f"[FF2] Native hook file missing from package: {src}")
+            continue
+        if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+            shutil.copy2(src, dst)
+            logger.info(f"[FF2] Installed {name} -> {dst}")
+
+    real_dst = game_dir / "dsound_real.dll"
+    if not real_dst.exists():
+        sys32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "SysWOW64" / "dsound.dll"
+        if sys32.exists():
+            shutil.copy2(sys32, real_dst)
+            logger.info(f"[FF2] Installed dsound_real.dll -> {real_dst}")
+        else:
+            logger.warning("[FF2] Could not find system dsound.dll to copy as dsound_real.dll")
+
+
+def _get_game_directory() -> Optional[Path]:
+    configured = get_settings()["feeding_frenzy_2_options"]["game_directory"]
+    if configured and Path(configured).exists():
+        return Path(configured)
+    return None
+
+
+def _pick_game_directory() -> Optional[Path]:
+    ff2_settings = get_settings()["feeding_frenzy_2_options"]
+    chosen = ff2_settings["game_directory"].browse()
+    if not chosen:
+        return None
+    ff2_settings["game_directory"] = str(chosen)
+    get_settings().save()
+    return Path(chosen)
+
+
+def launch_game() -> None:
+    game_dir = _get_game_directory()
+    if game_dir is None or not (game_dir / PROCESS_NAME).exists():
+        game_dir = _pick_game_directory()
+        if game_dir is None or not (game_dir / PROCESS_NAME).exists():
+            logger.warning("[FF2] No valid Feeding Frenzy 2 install directory selected.")
+            return
+
+    _ensure_native_hooks_installed(game_dir)
+
+    exe = game_dir / GAME_EXE_NAME
+    if not exe.exists():
+        # Some installs only ship popcapgame1.exe directly.
+        exe = game_dir / PROCESS_NAME
+    subprocess.Popen([str(exe)], cwd=str(game_dir))
+    logger.info(f"[FF2] Launched {exe}")
+
+
 # ── Command processor ─────────────────────────────────────────────────────────
 
 class FF2CommandProcessor(ClientCommandProcessor):
@@ -608,6 +689,10 @@ class FF2Context(CommonContext):
         self.max_stage_addr:  Optional[int]         = None
         self.fish_received:   int                   = 0
         self.game_ready:      bool                  = False
+
+        # native hook IPC (ff2ap_hooks.dll) — synchronous boundary enforcement
+        self._native_server:  Optional[asyncio.AbstractServer]     = None
+        self._native_writers: List[asyncio.StreamWriter]           = []
 
         # watcher state
         self._stop_event                    = threading.Event()
@@ -694,6 +779,7 @@ class FF2Context(CommonContext):
                     logger.info("[FF2] Received Suck")
                     if self.game_ready and self.base:
                         self._unblock_suck()
+            self._push_allowed_max()
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
@@ -860,6 +946,87 @@ class FF2Context(CommonContext):
             "cmd": "StatusUpdate",
             "status": 30,  # ClientStatus.CLIENT_GOAL
         }]))
+
+    # ── Native hook IPC ────────────────────────────────────────────────────────
+    # ff2ap_hooks.dll connects here once injected. It enforces the fish boundary
+    # synchronously in-process; this link exists to (a) tell it the current
+    # allowed max and (b) receive the completion check for whatever gateway
+    # level a boundary-crossing attempt was blocked at.
+
+    async def _start_native_server(self) -> None:
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            logger.info("[FF2] Native hooks connected")
+            self._native_writers.append(writer)
+            try:
+                writer.write(f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}\n".encode())
+                await writer.drain()
+                buf = b""
+                while True:
+                    chunk = await reader.read(512)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        self._handle_native_line(line.decode(errors="ignore"))
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+            finally:
+                if writer in self._native_writers:
+                    self._native_writers.remove(writer)
+                logger.info("[FF2] Native hooks disconnected")
+
+        self._native_server = await asyncio.start_server(handle, NATIVE_IPC_HOST, NATIVE_IPC_PORT)
+
+    def _handle_native_line(self, line: str) -> None:
+        line = line.strip()
+        if not line.startswith("LEVEL_COMPLETE "):
+            return
+        try:
+            completed_id = int(line.split(" ", 1)[1])
+        except ValueError:
+            return
+        if completed_id in self._completed_levels:
+            return
+        self._completed_levels.add(completed_id)
+        content_lvl = self._content_level(completed_id)
+        loc_id      = location_id_for(content_lvl, 2)
+        self._send_location(loc_id)
+        logger.info(f"[FF2] Check (native boundary): Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
+
+    def _push_allowed_max(self) -> None:
+        if not self._native_writers:
+            return
+        msg = f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}\n".encode()
+        for writer in list(self._native_writers):
+            try:
+                writer.write(msg)
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
+    # ── GUI ────────────────────────────────────────────────────────────────────
+
+    def run_gui(self) -> None:
+        from kvui import GameManager
+        from kivy.metrics import dp
+        from kivymd.uix.button import MDButton, MDButtonText
+
+        class FF2Manager(GameManager):
+            logging_pairs = [("Client", "Archipelago")]
+            base_title = "Feeding Frenzy 2 Client"
+
+            def build(self):
+                b = super().build()
+                button = MDButton(MDButtonText(text="Launch Game"), style="filled",
+                                   size=(dp(100), dp(70)), radius=5,
+                                   size_hint_x=None, size_hint_y=None, pos_hint={"center_y": 0.55},
+                                   on_press=lambda _: launch_game())
+                button.height = self.server_connect_bar.height
+                self.connect_layout.add_widget(button)
+                return b
+
+        self.ui = FF2Manager(self)
+        self.ui_task = asyncio.create_task(self.ui.async_run(), name="UI")
 
     def _send_death_link(self):
         if self._death_link_enabled:
@@ -1513,6 +1680,7 @@ def main():
             ctx.run_gui()
         ctx.run_cli()
 
+        await ctx._start_native_server()
         watcher = asyncio.create_task(game_watcher(ctx), name="game watcher")
 
         await ctx.exit_event.wait()

@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"F:/Feeding Frenzy 2 Archipelago/native/build/cmake_install.cmake",
+		"F:/Feeding Frenzy 2 Archipelago/native/build/thirdparty/minhook/cmake_install.cmake",
+		"F:/Feeding Frenzy 2 Archipelago/native/build/proxy_dsound/cmake_install.cmake",
+		"F:/Feeding Frenzy 2 Archipelago/native/build/ff2ap_hooks/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,1 +1,2 @@
-bugfix: send completion check on boundary collision
+Phase 2: migrate remaining pymem-based patches (dash/suck, shuffle, fullscreen/mouse-scale, deathlink, boss HP) into ff2ap_hooks.dll
+Phase 3: randomize access to power-ups (needs RE work first — find each power-up's trigger code)

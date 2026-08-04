@@ -1,4 +1,5 @@
-from typing import Dict, List
+from typing import ClassVar, Dict, List
+import settings
 from BaseClasses import Item, ItemClassification, Region, Tutorial
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, components, Type, launch_subprocess
@@ -35,6 +36,22 @@ components.append(Component(
 ))
 
 
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+class FF2Settings(settings.Group):
+    class GameDirectory(settings.OptionalUserFolderPath):
+        """
+        Path to the Feeding Frenzy 2 Deluxe install directory (the folder containing
+        popcapgame1.exe). Used by the client to launch the game and to place the
+        dsound.dll/ff2ap_hooks.dll injection pair that enforces the fish-gated level
+        boundary in-process. Picked once via the client's Launch Game button and
+        remembered here afterward.
+        """
+        description = "Feeding Frenzy 2 install directory"
+
+    game_directory: GameDirectory = GameDirectory("")
+
+
 # ── Web world ─────────────────────────────────────────────────────────────────
 
 class FF2WebWorld(WebWorld):
@@ -63,6 +80,7 @@ class FF2World(World):
     game              = GAME_NAME
     web               = FF2WebWorld()
     options_dataclass = FF2Options
+    settings: ClassVar[FF2Settings]
 
     item_name_to_id:     Dict[str, int] = item_name_to_id
     location_name_to_id: Dict[str, int] = location_name_to_id

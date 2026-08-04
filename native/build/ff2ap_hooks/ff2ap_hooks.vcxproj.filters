@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\ipc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boundary_gate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\level_guard.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{CF5B883E-1831-30C9-9A72-78BE249BF104}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,6 @@
+# CMake generation dependency list for this directory.
+C:/Program Files/CMake/share/cmake-4.3/Modules/BasicConfigVersion-AnyNewerVersion.cmake.in
+C:/Program Files/CMake/share/cmake-4.3/Modules/CMakePackageConfigHelpers.cmake
+C:/Program Files/CMake/share/cmake-4.3/Modules/WriteBasicConfigVersionFile.cmake
+F:/Feeding Frenzy 2 Archipelago/native/thirdparty/minhook/CMakeLists.txt
+F:/Feeding Frenzy 2 Archipelago/native/thirdparty/minhook/cmake/minhook-config.cmake.in
