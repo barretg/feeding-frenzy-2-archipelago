@@ -612,7 +612,7 @@ def _valid_game_directory(path) -> Optional[Path]:
     if not path:
         return None
     p = Path(str(path))
-    return p if (p / PROCESS_NAME).exists() else None
+    return p if (p / GAME_EXE_NAME).exists() else None
 
 
 def _get_game_directory() -> Optional[Path]:
@@ -645,15 +645,12 @@ def launch_game() -> None:
         game_dir = _pick_game_directory()
         if game_dir is None:
             logger.warning("[FF2] No valid Feeding Frenzy 2 install directory selected "
-                            f"(must contain {PROCESS_NAME}).")
+                            f"(must contain {GAME_EXE_NAME}).")
             return
 
     _ensure_native_hooks_installed(game_dir)
 
     exe = game_dir / GAME_EXE_NAME
-    if not exe.exists():
-        # Some installs only ship popcapgame1.exe directly.
-        exe = game_dir / PROCESS_NAME
     subprocess.Popen([str(exe)], cwd=str(game_dir))
     logger.info(f"[FF2] Launched {exe}")
 
