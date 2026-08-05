@@ -316,7 +316,7 @@ class FF2Context(CommonContext):
             self._completed_levels.add(completed_id)
             content_lvl = self._content_level(completed_id)
             self._send_location(location_id_for(content_lvl, 2))
-            logger.info(f"[FF2] Check: Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
+            logger.info(f"[FF2] Check: Slot {completed_id + 1} -> Content {content_lvl + 1} Complete")
             return
 
         if line.startswith("STAGE_COMPLETE "):
@@ -337,7 +337,7 @@ class FF2Context(CommonContext):
             if (content_lvl + 1) in BONUS_LEVELS:
                 return  # bonus levels only get a Complete check, not per-stage
             self._send_location(location_id_for(content_lvl, stage - 1))
-            logger.info(f"[FF2] Check: Slot {level_id + 1} → Content {content_lvl + 1} Stage {stage}")
+            logger.info(f"[FF2] Check: Slot {level_id + 1} -> Content {content_lvl + 1} Stage {stage}")
             return
 
         if line == "GOAL":
