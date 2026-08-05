@@ -95,4 +95,56 @@ bool InstallBoundaryGate() {
     return MH_EnableHook(target) == MH_OK;
 }
 
+namespace {
+
+// mov ecx,[ebx+0Ch] ; mov ecx,[ecx+3Ch] ; mov [ecx+28],eax  -- the last of these three is
+// the actual write; the two `mov ecx,...` before it resolve ecx to level_obj. Confirmed
+// live via x64dbg this session: this single site fires for BOTH the map-select confirm
+// path (eax = whatever level the player clicked, unclamped) and the natural
+// continue-advance path (eax = current level + 1) — one clamp here covers both instead of
+// racing the level_guard.cpp poll loop against the game's own async level-load thread,
+// which is what caused the earlier intermittent wrong-content-on-clamp bug: writing the
+// clamp value up to 2ms *after* the game's own write let the loader thread sometimes read
+// the raw unclamped value first.
+constexpr uintptr_t kLevelSelectWriteOffset = 0x11641;
+
+void* g_levelselect_original = nullptr;
+
+extern "C" int __cdecl ClampLevelSelect(int requested) {
+    const int allowed = ipc::g_allowed_max.load(std::memory_order_relaxed);
+    return requested > allowed ? allowed : requested;
+}
+
+// Naked: entry state is ecx = level_obj (already resolved by the two stolen `mov ecx,...`
+// MinHook relocates into the trampoline), eax = requested level id. We only need to
+// replace eax with the clamped value before falling through to the (relocated) store —
+// ecx must survive untouched since the original instruction still needs it, and edx is
+// caller-owned/cdecl-volatile same as the UpdateMaxStage detour above, so it gets saved
+// and restored around the call too.
+__declspec(naked) void Detour_LevelSelectWrite() {
+    __asm {
+        push edx                            ; save caller's edx
+        push ecx                            ; save level_obj ptr, needed by the original store
+        push eax                            ; cdecl arg: requested level id
+        call ClampLevelSelect
+        add  esp, 4                         ; cdecl caller cleans the one pushed arg
+                                             ; eax now holds the clamped return value — left as-is
+        pop  ecx                            ; restore level_obj ptr
+        pop  edx                            ; restore caller's edx
+        jmp  dword ptr [g_levelselect_original]
+    }
+}
+
+}  // namespace
+
+bool InstallLevelSelectGate() {
+    auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    void* target = reinterpret_cast<void*>(base + kLevelSelectWriteOffset);
+
+    if (MH_CreateHook(target, reinterpret_cast<void*>(&Detour_LevelSelectWrite), &g_levelselect_original) != MH_OK) {
+        return false;
+    }
+    return MH_EnableHook(target) == MH_OK;
+}
+
 }  // namespace hooks

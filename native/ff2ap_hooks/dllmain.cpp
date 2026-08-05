@@ -18,6 +18,7 @@ DWORD WINAPI WorkerThread(LPVOID) {
         return 1;
     }
     hooks::InstallBoundaryGate();
+    hooks::InstallLevelSelectGate();
     hooks::InstallLevelGuard();
     hooks::InstallPlayerFish();
     hooks::InstallAbilityGate();

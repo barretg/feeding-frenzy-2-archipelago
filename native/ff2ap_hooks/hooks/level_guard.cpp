@@ -93,14 +93,25 @@ void PollLoop() {
         // ── boundary enforcement (Phase 1 — fast path, no debounce) ────────
         const int allowed = ipc::g_allowed_max.load(std::memory_order_relaxed);
         if (raw_level_id > allowed) {
-            const int gateway        = raw_level_id - 1;
+            // Clamp straight to `allowed` in one write rather than raw_level_id - 1: a
+            // level-select click can jump arbitrarily far ahead (not just one level past
+            // the boundary), and writing intermediate values one per tick let the game's
+            // own content loader latch onto whatever the field read as mid-cascade —
+            // visually landing on id 8 every time regardless of how far past the boundary
+            // the click was, even once this loop had already walked the tracked id down
+            // to the correct value.
             const int score_snapshot = Read(obj + OFFSET_SCORE_SNAPSHOT);
             const int lives_snapshot = Read(obj + OFFSET_LIVES_SNAPSHOT);
-            Write(obj + OFFSET_LEVEL_ID, gateway);
+            Write(obj + OFFSET_LEVEL_ID, allowed);
             Write(obj + OFFSET_SCORE,    score_snapshot);
             Write(obj + OFFSET_LIVES,    lives_snapshot);
             Write(obj + OFFSET_PROGRESS, 0);
-            ipc::QueueSend("LEVEL_COMPLETE " + std::to_string(gateway));
+            // Only a genuine single-step advance (finishing `allowed` and continuing)
+            // represents a real completion worth reporting — a level-select skip ahead
+            // didn't complete anything.
+            if (raw_level_id == allowed + 1) {
+                ipc::QueueSend("LEVEL_COMPLETE " + std::to_string(allowed));
+            }
             continue;  // state was just rewritten under us — resample next tick
         }
 

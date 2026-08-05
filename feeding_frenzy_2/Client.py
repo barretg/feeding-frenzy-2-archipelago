@@ -4,6 +4,7 @@ Feeding Frenzy 2 Archipelago Client
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
 import os
 import shutil
 import subprocess
@@ -36,7 +37,11 @@ ITEM_SUCK              = 0xFF20000 + 4
 NATIVE_IPC_HOST  = "127.0.0.1"
 NATIVE_IPC_PORT  = 39270
 NATIVE_DLL_NAMES = ("dsound.dll", "ff2ap_hooks.dll")
-GAME_EXE_NAME    = "FeedingFrenzy2.exe"  # real entry point; spawns popcapgame1.exe itself
+GAME_EXE_NAMES   = ("FeedingFrenzy2.exe", "FeedingFrenzyTwo.exe")  # CD vs Steam release; both spawn popcapgame1.exe itself
+STEAM_APPID      = "3390"  # "Feeding Frenzy 2: Shipwreck Showdown Deluxe" — Steam release must be launched
+                            # through Steam itself (steam://run), not the exe directly: the depot doesn't ship
+                            # steam.dll on disk, Steam's own launcher injects it, and running the exe standalone
+                            # fails with "Unable to launch steam.dll".
 
 
 # ── Game logic helpers ────────────────────────────────────────────────────────
@@ -54,23 +59,28 @@ def location_id_for(level_id: int, slot: int) -> int:
 
 # ── Native hook install / launch ──────────────────────────────────────────────
 
-def _native_package_dir() -> Path:
-    return Path(__file__).parent / "native"
+def _read_native_asset(name: str) -> Optional[bytes]:
+    # A .apworld is a zip that AP loads via zipimport without extracting it, so
+    # Path(__file__)/"native"/name isn't a real filesystem path when installed that way
+    # (it silently reports not-exists). importlib.resources reads through the zip either way.
+    try:
+        return importlib.resources.files(__package__).joinpath("native").joinpath(name).read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError):
+        return None
 
 
 def _ensure_native_hooks_installed(game_dir: Path) -> None:
-    """Copy the bundled proxy/payload DLLs (and a local copy of the real system
+    """Write the bundled proxy/payload DLLs (and a local copy of the real system
     dsound.dll for the proxy to forward to) into the game's install directory,
-    if missing or older than what's bundled in this apworld."""
-    src_dir = _native_package_dir()
+    if missing or different from what's bundled in this apworld."""
     for name in NATIVE_DLL_NAMES:
-        src = src_dir / name
-        dst = game_dir / name
-        if not src.exists():
-            logger.warning(f"[FF2] Native hook file missing from package: {src}")
+        data = _read_native_asset(name)
+        if data is None:
+            logger.warning(f"[FF2] Native hook file missing from package: native/{name}")
             continue
-        if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
-            shutil.copy2(src, dst)
+        dst = game_dir / name
+        if not dst.exists() or dst.read_bytes() != data:
+            dst.write_bytes(data)
             logger.info(f"[FF2] Installed {name} -> {dst}")
 
     real_dst = game_dir / "dsound_real.dll"
@@ -83,11 +93,19 @@ def _ensure_native_hooks_installed(game_dir: Path) -> None:
             logger.warning("[FF2] Could not find system dsound.dll to copy as dsound_real.dll")
 
 
+def _find_game_exe(p: Path) -> Optional[Path]:
+    for name in GAME_EXE_NAMES:
+        exe = p / name
+        if exe.exists():
+            return exe
+    return None
+
+
 def _valid_game_directory(path) -> Optional[Path]:
     if not path:
         return None
     p = Path(str(path))
-    return p if (p / GAME_EXE_NAME).exists() else None
+    return p if _find_game_exe(p) else None
 
 
 def _get_game_directory() -> Optional[Path]:
@@ -120,13 +138,18 @@ def launch_game() -> None:
         game_dir = _pick_game_directory()
         if game_dir is None:
             logger.warning("[FF2] No valid Feeding Frenzy 2 install directory selected "
-                            f"(must contain {GAME_EXE_NAME}).")
+                            f"(must contain one of {GAME_EXE_NAMES}).")
             return
 
     _ensure_native_hooks_installed(game_dir)
 
-    exe = game_dir / GAME_EXE_NAME
-    subprocess.Popen([str(exe)], cwd=str(game_dir))
+    exe = _find_game_exe(game_dir)
+    if exe.name == "FeedingFrenzyTwo.exe":
+        # Steam release: must go through Steam's own launcher so it can provide steam.dll;
+        # running the exe directly fails with "Unable to launch steam.dll".
+        os.startfile(f"steam://run/{STEAM_APPID}")
+    else:
+        subprocess.Popen([str(exe)], cwd=str(game_dir))
     logger.info(f"[FF2] Launched {exe}")
 
 
@@ -137,6 +160,45 @@ class FF2CommandProcessor(ClientCommandProcessor):
         """Toggle borderless windowed fullscreen with scaled mouse input."""
         ctx: FF2Context = self.ctx
         ctx._send_native("TOGGLE_FULLSCREEN")
+
+    def _cmd_directory(self, path: str = "") -> None:
+        """Manually set the Feeding Frenzy 2 install directory. Usage: /directory "<path>" """
+        if not path:
+            logger.warning('[FF2] Usage: /directory "<path to install folder>"')
+            return
+        game_dir = _valid_game_directory(path)
+        if game_dir is None:
+            logger.warning(f'[FF2] "{path}" does not contain one of {GAME_EXE_NAMES} '
+                            f"-- not a valid Feeding Frenzy 2 install directory.")
+            return
+        from . import FF2Settings
+        get_settings()["feeding_frenzy_2_options"]["game_directory"] = FF2Settings.GameDirectory(str(game_dir))
+        get_settings().save()
+        logger.info(f"[FF2] Game directory set to {game_dir}")
+
+    def _cmd_uninstall(self):
+        """Remove the injected native hook files from the game's install directory,
+        restoring normal (unmodified) launches outside of Archipelago."""
+        game_dir = _get_game_directory()
+        if game_dir is None:
+            logger.warning("[FF2] No valid Feeding Frenzy 2 install directory configured; nothing to uninstall.")
+            return
+        removed, failed = [], []
+        for name in (*NATIVE_DLL_NAMES, "dsound_real.dll"):
+            f = game_dir / name
+            if not f.exists():
+                continue
+            try:
+                f.unlink()
+                removed.append(name)
+            except OSError:
+                failed.append(name)
+        if failed:
+            logger.warning(f"[FF2] Could not remove {', '.join(failed)} -- close the game first, then retry.")
+        if removed:
+            logger.info(f"[FF2] Removed: {', '.join(removed)}. The game will launch unmodified from now on.")
+        elif not failed:
+            logger.info("[FF2] Nothing to remove -- native hooks were not installed in this directory.")
 
     def _cmd_status(self):
         """Show current game state (as of the last update received from the game)."""
