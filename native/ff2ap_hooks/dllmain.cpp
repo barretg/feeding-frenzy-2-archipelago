@@ -5,6 +5,11 @@
 #include "hooks/boundary_gate.h"
 #include "hooks/level_guard.h"
 #include "hooks/player_fish.h"
+#include "hooks/ability_gate.h"
+#include "hooks/deathlink.h"
+#include "hooks/boss_hp.h"
+#include "hooks/shuffle.h"
+#include "hooks/fullscreen.h"
 
 namespace {
 
@@ -15,6 +20,11 @@ DWORD WINAPI WorkerThread(LPVOID) {
     hooks::InstallBoundaryGate();
     hooks::InstallLevelGuard();
     hooks::InstallPlayerFish();
+    hooks::InstallAbilityGate();
+    hooks::InstallDeathLink();
+    hooks::InstallBossHp();
+    hooks::InstallShuffle();
+    hooks::InstallFullscreen();
     ipc::Init();  // background connect/receive loop; never returns
     return 0;
 }

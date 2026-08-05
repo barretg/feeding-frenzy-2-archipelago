@@ -4,3 +4,8 @@ F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\state.cpp;F:\Feeding Frenzy 2
 F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boundary_gate.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\boundary_gate.obj
 F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\level_guard.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\level_guard.obj
 F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\player_fish.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\player_fish.obj
+F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\ability_gate.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\ability_gate.obj
+F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\deathlink.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\deathlink.obj
+F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boss_hp.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\boss_hp.obj
+F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\shuffle.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\shuffle.obj
+F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\fullscreen.cpp;F:\Feeding Frenzy 2 Archipelago\native\build\ff2ap_hooks\ff2ap_hooks.dir\Release\fullscreen.obj

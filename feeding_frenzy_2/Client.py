@@ -4,550 +4,39 @@ Feeding Frenzy 2 Archipelago Client
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import ctypes.wintypes as wintypes
 import os
 import shutil
-import struct
 import subprocess
-import sys
-import threading
 from pathlib import Path
 from typing import List, Optional
-
-import pymem
-import pymem.process
 
 import Utils
 from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandProcessor, logger, get_base_parser
 from settings import get_settings
 
-GAME_NAME    = "Feeding Frenzy 2"
-PROCESS_NAME = "popcapgame1.exe"
-
-# ── Instruction offsets from exe base ────────────────────────────────────────
-LEVEL_STATE_OFFSET = 0x9C064
-MAX_STAGE_OFFSET   = 0x9AED3
-
-# ── Struct offsets from captured level object base ────────────────────────────
-OFFSET_LIVES          = 0x10
-OFFSET_SCORE          = 0x14
-OFFSET_STAGE          = 0x24
-OFFSET_LEVEL_ID       = 0x28
-OFFSET_SCORE_SNAPSHOT = 0x30
-OFFSET_LIVES_SNAPSHOT = 0x34
-OFFSET_PROGRESS       = 0x40
-
-# ── Player fish struct offsets ────────────────────────────────────────────────
-PLAYER_FISH_OFFSET    = 0x38D47
-OFFSET_SUB_OBJECT     = 0x8C
-OFFSET_ALIVE_PTR      = 0x78
-OFFSET_RESPAWN_FLAG   = 0x98
-DEATH_FUNC            = 0x00404E10
-
-# ── Max stage offset from ecx ─────────────────────────────────────────────────
-OFFSET_MAX_STAGE = 0x58
-
-# ── Boss health counter ───────────────────────────────────────────────────────
-BOSS_HP_OFFSET  = 0xA908A   # inc [ecx+0xB4]  — fires each time boss takes a hit
-OFFSET_BOSS_HP  = 0xB4      # goal at 20 hits
+GAME_NAME = "Feeding Frenzy 2"
 
 # ── Zone boundaries (0-indexed level where each new zone starts) ──────────────
 ZONE_BOUNDARIES = [0, 8, 16, 21, 29, 37, 45, 48, 51, 54, 57]
 
 # ── Location IDs (must match world definition) ────────────────────────────────
 BONUS_LEVELS = frozenset({4, 7, 12, 15, 20, 25, 28, 33, 36, 41, 45, 48, 51, 54, 57, 60})
-TOTAL_LEVELS = 60
 LOC_BASE     = 0xFF20000 + 0x1000
 
 ITEM_PROGRESSIVE_FISH = 0xFF20000 + 1
 ITEM_1UP              = 0xFF20000 + 2
-ITEM_DASH             = 0xFF20000 + 3
-ITEM_SUCK             = 0xFF20000 + 4
+ITEM_DASH              = 0xFF20000 + 3
+ITEM_SUCK              = 0xFF20000 + 4
 
 # ── Native hook IPC (ff2ap_hooks.dll, injected via the dsound.dll proxy) ──────
 # Loopback TCP, newline-delimited text — must match native/ff2ap_hooks/ipc.h.
+# All game-memory access lives in the DLL now; this client is pure network/asyncio
+# code, cross-platform (works the same whether the DLL is native Windows or running
+# under Proton on SteamOS — the TCP link bridges the Wine boundary transparently).
 NATIVE_IPC_HOST  = "127.0.0.1"
 NATIVE_IPC_PORT  = 39270
 NATIVE_DLL_NAMES = ("dsound.dll", "ff2ap_hooks.dll")
 GAME_EXE_NAME    = "FeedingFrenzy2.exe"  # real entry point; spawns popcapgame1.exe itself
-
-# ── Dash ability patch ────────────────────────────────────────────────────────
-# Patch the call site at 0x004248AD (WM_LBUTTONDOWN handler) to NOP.
-# This is the actual dash trigger (call 0x4204A0); 0x0042490B was cursor snap only.
-DASH_CALL_OFFSET = 0x248AD
-DASH_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
-DASH_UNBLOCKED   = bytes([0xE8, 0xEE, 0xBB, 0xFF, 0xFF])        # call 0x4204A0
-
-# ── Suck ability patch ────────────────────────────────────────────────────────
-# Patch the call site at 0x00424A31 (WM_RBUTTONDOWN handler) to NOP.
-SUCK_CALL_OFFSET = 0x24A31
-SUCK_BLOCKED     = bytes([0x90, 0x90, 0x90, 0x90, 0x90])        # NOP x5
-SUCK_UNBLOCKED   = bytes([0xE8, 0xAA, 0x98, 0x06, 0x00])        # call 0x48E2E0
-
-# ── Level shuffle hook — read-side remap (3 patch sites) ─────────────────────
-# Site 1: 0x49AB70 — mov ecx,[eax+28]; test ecx,ecx  (map-click level data getter)
-SHUFFLE_SITE1_OFFSET   = 0x9AB70
-SHUFFLE_SITE1_ORIGINAL = bytes([0x8B, 0x48, 0x28, 0x85, 0xC9])
-# Site 2: 0x40510A — mov eax,[edi]; mov ecx,[eax+28]  (continue-button level data getter)
-SHUFFLE_SITE2_OFFSET   = 0x510A
-SHUFFLE_SITE2_ORIGINAL = bytes([0x8B, 0x07, 0x8B, 0x48, 0x28])
-# Site 3: 0x403468 — push esi; push [eax+28]; lea esi,[eax+50]  (level data lookup helper)
-SHUFFLE_SITE3_OFFSET   = 0x3468
-SHUFFLE_SITE3_ORIGINAL = bytes([0x56, 0xFF, 0x70, 0x28, 0x8D, 0x70, 0x50])
-
-# ── Windows debug API setup ───────────────────────────────────────────────────
-DBG_CONTINUE      = 0x00010002
-TH32CS_SNAPTHREAD = 0x00000004
-
-CONTEXT_DEBUG_REGISTERS = 0x00010010
-CONTEXT_INTEGER         = 0x00010002
-CONTEXT_CONTROL         = 0x00010001
-CONTEXT_CAPTURE         = CONTEXT_DEBUG_REGISTERS | CONTEXT_INTEGER | CONTEXT_CONTROL
-
-THREAD_SUSPEND_RESUME    = 0x0002
-THREAD_GET_CONTEXT       = 0x0008
-THREAD_SET_CONTEXT       = 0x0010
-THREAD_QUERY_INFORMATION = 0x0040
-THREAD_ACCESS = (
-    THREAD_SUSPEND_RESUME |
-    THREAD_GET_CONTEXT    |
-    THREAD_SET_CONTEXT    |
-    THREAD_QUERY_INFORMATION
-)
-
-Wow64GetThreadContext           = ctypes.windll.kernel32.Wow64GetThreadContext
-Wow64GetThreadContext.argtypes  = [wintypes.HANDLE, ctypes.c_void_p]
-Wow64GetThreadContext.restype   = wintypes.BOOL
-
-Wow64SetThreadContext           = ctypes.windll.kernel32.Wow64SetThreadContext
-Wow64SetThreadContext.argtypes  = [wintypes.HANDLE, ctypes.c_void_p]
-Wow64SetThreadContext.restype   = wintypes.BOOL
-
-
-# ── ctypes structures ─────────────────────────────────────────────────────────
-
-class THREADENTRY32(ctypes.Structure):
-    _fields_ = [
-        ("dwSize",             wintypes.DWORD),
-        ("cntUsage",           wintypes.DWORD),
-        ("th32ThreadID",       wintypes.DWORD),
-        ("th32OwnerProcessID", wintypes.DWORD),
-        ("tpBasePri",          wintypes.LONG),
-        ("tpDeltaPri",         wintypes.LONG),
-        ("dwFlags",            wintypes.DWORD),
-    ]
-
-class EXCEPTION_RECORD(ctypes.Structure):
-    pass
-
-EXCEPTION_RECORD._fields_ = [
-    ("ExceptionCode",        wintypes.DWORD),
-    ("ExceptionFlags",       wintypes.DWORD),
-    ("ExceptionRecord",      ctypes.POINTER(EXCEPTION_RECORD)),
-    ("ExceptionAddress",     ctypes.c_void_p),
-    ("NumberParameters",     wintypes.DWORD),
-    ("ExceptionInformation", ctypes.c_ulong * 15),
-]
-
-class EXCEPTION_DEBUG_INFO(ctypes.Structure):
-    _fields_ = [
-        ("ExceptionRecord", EXCEPTION_RECORD),
-        ("dwFirstChance",   wintypes.DWORD),
-    ]
-
-class DEBUG_EVENT_UNION(ctypes.Union):
-    _fields_ = [
-        ("Exception", EXCEPTION_DEBUG_INFO),
-        ("pad",       ctypes.c_byte * 160),
-    ]
-
-class DEBUG_EVENT(ctypes.Structure):
-    _fields_ = [
-        ("dwDebugEventCode", wintypes.DWORD),
-        ("dwProcessId",      wintypes.DWORD),
-        ("dwThreadId",       wintypes.DWORD),
-        ("u",                DEBUG_EVENT_UNION),
-    ]
-
-class FLOATING_SAVE_AREA(ctypes.Structure):
-    _fields_ = [
-        ("ControlWord",   wintypes.DWORD),
-        ("StatusWord",    wintypes.DWORD),
-        ("TagWord",       wintypes.DWORD),
-        ("ErrorOffset",   wintypes.DWORD),
-        ("ErrorSelector", wintypes.DWORD),
-        ("DataOffset",    wintypes.DWORD),
-        ("DataSelector",  wintypes.DWORD),
-        ("RegisterArea",  ctypes.c_byte * 80),
-        ("Cr0NpxState",   wintypes.DWORD),
-    ]
-
-class CONTEXT(ctypes.Structure):
-    _fields_ = [
-        ("ContextFlags",      wintypes.DWORD),
-        ("Dr0",               wintypes.DWORD),
-        ("Dr1",               wintypes.DWORD),
-        ("Dr2",               wintypes.DWORD),
-        ("Dr3",               wintypes.DWORD),
-        ("Dr6",               wintypes.DWORD),
-        ("Dr7",               wintypes.DWORD),
-        ("FloatSave",         FLOATING_SAVE_AREA),
-        ("SegGs",             wintypes.DWORD),
-        ("SegFs",             wintypes.DWORD),
-        ("SegEs",             wintypes.DWORD),
-        ("SegDs",             wintypes.DWORD),
-        ("Edi",               wintypes.DWORD),
-        ("Esi",               wintypes.DWORD),
-        ("Ebx",               wintypes.DWORD),
-        ("Edx",               wintypes.DWORD),
-        ("Ecx",               wintypes.DWORD),
-        ("Eax",               wintypes.DWORD),
-        ("Ebp",               wintypes.DWORD),
-        ("Eip",               wintypes.DWORD),
-        ("SegCs",             wintypes.DWORD),
-        ("EFlags",            wintypes.DWORD),
-        ("Esp",               wintypes.DWORD),
-        ("SegSs",             wintypes.DWORD),
-        ("ExtendedRegisters", ctypes.c_byte * 512),
-    ]
-
-
-# ── Memory helpers ────────────────────────────────────────────────────────────
-
-def read_int(pm: pymem.Pymem, address: int) -> int:
-    return int.from_bytes(pm.read_bytes(address, 4), byteorder="little")
-
-
-# ── Window / fullscreen / scalemouse / centerfix constants ───────────────────
-GWL_STYLE                = -16
-WS_POPUP                 = 0x80000000
-WS_CAPTION               = 0x00C00000
-WS_THICKFRAME            = 0x00040000
-WS_MINIMIZEBOX           = 0x00020000
-WS_MAXIMIZEBOX           = 0x00010000
-WS_SYSMENU               = 0x00080000
-SWP_NOZORDER             = 0x0004
-SWP_FRAMECHANGED         = 0x0020
-MONITOR_DEFAULTTONEAREST = 0x0002
-
-WNDPROC_OFFSET   = 0x24780    # WndProc entry offset from exe base
-WNDPROC_RET_OFF  = 0x24786    # first instruction after stolen prologue
-WNDPROC_ORIGINAL = bytes([0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8])
-
-IAT_SETCURSORPOS = 0x146280   # 0x546280 - image base (0x400000)
-
-MEM_COMMIT             = 0x1000
-MEM_RESERVE            = 0x2000
-MEM_RELEASE            = 0x8000
-PAGE_EXECUTE_READWRITE = 0x40
-
-
-class MONITORINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize",    wintypes.DWORD),
-        ("rcMonitor", wintypes.RECT),
-        ("rcWork",    wintypes.RECT),
-        ("dwFlags",   wintypes.DWORD),
-    ]
-
-
-def write_bytes(pm: pymem.Pymem, address: int, data: bytes) -> None:
-    buf     = (ctypes.c_byte * len(data))(*data)
-    written = ctypes.c_size_t(0)
-    ctypes.windll.kernel32.WriteProcessMemory(
-        pm.process_handle,
-        ctypes.c_void_p(address),
-        buf, len(data),
-        ctypes.byref(written),
-    )
-
-
-def write_int(pm: pymem.Pymem, address: int, value: int) -> None:
-    buf     = (value & 0xFFFFFFFF).to_bytes(4, byteorder="little")
-    written = ctypes.c_size_t(0)
-    ctypes.windll.kernel32.WriteProcessMemory(
-        pm.process_handle,
-        ctypes.c_void_p(address),
-        buf, 4,
-        ctypes.byref(written),
-    )
-
-
-# ── Fullscreen / mouse-scale / centerfix helpers ──────────────────────────────
-
-def _game_hwnd() -> int:
-    return ctypes.windll.user32.FindWindowA(b"Gatsu", None)
-
-
-def _client_size(hwnd: int):
-    r = wintypes.RECT()
-    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(r))
-    return r.right, r.bottom
-
-
-def _client_center_screen(hwnd: int):
-    r = wintypes.RECT()
-    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(r))
-    pt = wintypes.POINT(r.right // 2, r.bottom // 2)
-    ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
-    return pt.x, pt.y
-
-
-def _build_mouse_cave(block: int, base: int) -> bytes:
-    """WndProc entry hook: rescale WM_MOUSE* lParam coords to 800×600 canvas space."""
-    sx_addr = block + 0
-    sy_addr = block + 4
-
-    work = bytearray()
-    work += bytes([0x0F, 0xBF, 0x45, 0x14])                        # movsx eax,word [ebp+14]  ; X
-    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sx_addr)  # imul eax,[sx]
-    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16
-    work += bytes([0x0F, 0xB7, 0xD0])                               # movzx edx,ax
-    work += bytes([0x52])                                           # push edx
-    work += bytes([0x8B, 0x45, 0x14])                               # mov eax,[ebp+14]
-    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16               ; Y
-    work += bytes([0x0F, 0xAF, 0x05]) + struct.pack('<I', sy_addr)  # imul eax,[sy]
-    work += bytes([0xC1, 0xF8, 0x10])                               # sar eax,16
-    work += bytes([0xC1, 0xE0, 0x10])                               # shl eax,16
-    work += bytes([0x5A])                                           # pop edx
-    work += bytes([0x0F, 0xB7, 0xD2])                               # movzx edx,dx
-    work += bytes([0x09, 0xD0])                                     # or eax,edx
-    work += bytes([0x89, 0x45, 0x14])                               # mov [ebp+14],eax
-
-    code = bytearray()
-    code += bytes([0x55])                                           # push ebp
-    code += bytes([0x8B, 0xEC])                                     # mov ebp,esp
-    code += bytes([0x50])                                           # push eax
-    code += bytes([0x52])                                           # push edx
-    code += bytes([0x8B, 0x45, 0x0C])                               # mov eax,[ebp+0C]  ; msg
-    code += bytes([0x2D, 0x00, 0x02, 0x00, 0x00])                   # sub eax,0x200
-    code += bytes([0x83, 0xF8, 0x09])                               # cmp eax,9
-    code += bytes([0x77, len(work)])                                # ja .restore
-    code += work
-    code += bytes([0x5A])                                           # pop edx  (.restore)
-    code += bytes([0x58])                                           # pop eax
-    code += bytes([0x5D])                                           # pop ebp
-    code += bytes([0x55])                                           # push ebp  (stolen)
-    code += bytes([0x8B, 0xEC])                                     # mov ebp,esp (stolen)
-    code += bytes([0x83, 0xE4, 0xF8])                               # and esp,-8  (stolen)
-    jmp_pos  = block + 8 + len(code)
-    ret_addr = base + WNDPROC_RET_OFF
-    rel      = (ret_addr - (jmp_pos + 5)) & 0xFFFFFFFF
-    code += bytes([0xE9]) + struct.pack('<I', rel)                  # jmp WNDPROC_RET_OFF
-    return bytes(code)
-
-
-def _build_centerfix_cave(cave: int) -> bytes:
-    """IAT replacement for SetCursorPos. Redirects park call to true screen center.
-    Cave layout: [+0]=screenX [+4]=screenY [+8]=real ptr [+12]=enable
-                 [+20]=last_orig_x [+24]=last_orig_y  code@+28"""
-    code = bytearray()
-    code += bytes([0x8B, 0x44, 0x24, 0x04])                        # mov eax,[esp+4]  (orig x)
-    code += bytes([0xA3]) + struct.pack('<I', cave + 20)            # mov [cave+20],eax
-    code += bytes([0x8B, 0x44, 0x24, 0x08])                        # mov eax,[esp+8]  (orig y)
-    code += bytes([0xA3]) + struct.pack('<I', cave + 24)            # mov [cave+24],eax
-    code += bytes([0x83, 0x3D]) + struct.pack('<I', cave + 12) + bytes([0x00])  # cmp [enable],0
-    code += bytes([0x74, 18])                                       # je .pass (skip 18 bytes)
-    code += bytes([0xA1]) + struct.pack('<I', cave + 0)             # mov eax,[screenX]
-    code += bytes([0x89, 0x44, 0x24, 0x04])                        # mov [esp+4],eax
-    code += bytes([0xA1]) + struct.pack('<I', cave + 4)             # mov eax,[screenY]
-    code += bytes([0x89, 0x44, 0x24, 0x08])                        # mov [esp+8],eax
-    code += bytes([0xFF, 0x25]) + struct.pack('<I', cave + 8)       # jmp [real]
-    return bytes(code)
-
-
-# ── Thread / breakpoint helpers ───────────────────────────────────────────────
-
-def get_process_threads(pid: int):
-    snapshot = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
-    threads  = []
-    entry    = THREADENTRY32()
-    entry.dwSize = ctypes.sizeof(THREADENTRY32)
-    if ctypes.windll.kernel32.Thread32First(snapshot, ctypes.byref(entry)):
-        while True:
-            if entry.th32OwnerProcessID == pid:
-                threads.append(entry.th32ThreadID)
-            if not ctypes.windll.kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
-                break
-    ctypes.windll.kernel32.CloseHandle(snapshot)
-    return threads
-
-
-def get_thread_handle(tid: int):
-    return ctypes.windll.kernel32.OpenThread(THREAD_ACCESS, False, tid)
-
-
-def set_hardware_breakpoint(thread_handle, address: int, dr_index: int = 0) -> bool:
-    if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
-        return False
-    try:
-        ctx = CONTEXT()
-        ctx.ContextFlags = CONTEXT_CAPTURE
-        if not Wow64GetThreadContext(thread_handle, ctypes.byref(ctx)):
-            return False
-        if dr_index == 0:
-            ctx.Dr0 = address
-        elif dr_index == 1:
-            ctx.Dr1 = address
-        ctx.Dr6 = 0
-        ctx.Dr7 |= (0x1 << (dr_index * 2))
-        ctx.Dr7 &= ~(0xF << (16 + dr_index * 4))
-        ctx.ContextFlags = CONTEXT_CAPTURE
-        return bool(Wow64SetThreadContext(thread_handle, ctypes.byref(ctx)))
-    finally:
-        ctypes.windll.kernel32.ResumeThread(thread_handle)
-
-
-def clear_hardware_breakpoint(thread_handle, dr_index: int = 0) -> None:
-    if ctypes.windll.kernel32.SuspendThread(thread_handle) == 0xFFFFFFFF:
-        return
-    try:
-        ctx = CONTEXT()
-        ctx.ContextFlags = CONTEXT_CAPTURE
-        Wow64GetThreadContext(thread_handle, ctypes.byref(ctx))
-        if dr_index == 0:
-            ctx.Dr0 = 0
-        elif dr_index == 1:
-            ctx.Dr1 = 0
-        ctx.Dr7 &= ~(0x1 << (dr_index * 2))
-        ctx.ContextFlags = CONTEXT_CAPTURE
-        Wow64SetThreadContext(thread_handle, ctypes.byref(ctx))
-    finally:
-        ctypes.windll.kernel32.ResumeThread(thread_handle)
-
-
-def set_bp_on_thread(tid: int, address: int, dr_index: int = 0) -> bool:
-    th = get_thread_handle(tid)
-    if th:
-        ok = set_hardware_breakpoint(th, address, dr_index)
-        ctypes.windll.kernel32.CloseHandle(th)
-        return ok
-    return False
-
-
-# ── Capture routines ──────────────────────────────────────────────────────────
-
-def capture_level_object(pm: pymem.Pymem, base: int) -> Optional[int]:
-    target = base + LEVEL_STATE_OFFSET
-    logger.info(f"[FF2] Waiting for level load to capture game object (0x{target:08X})...")
-
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        logger.error(f"[FF2] Failed to attach debugger: {ctypes.windll.kernel32.GetLastError()}")
-        return None
-
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
-
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, 0)
-
-    level_object = None
-    debug_event  = DEBUG_EVENT()
-
-    while level_object is None:
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
-
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
-
-        if event_code == 2:  # CREATE_THREAD_DEBUG_EVENT
-            pass
-
-        elif event_code == 1:  # EXCEPTION_DEBUG_EVENT
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            if exc_addr == target and code not in (0x80000003,):
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx = CONTEXT()
-                            ctx.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx)) and ctx.Eip == target:
-                                level_object = ctx.Eax
-                                logger.info(f"[FF2] Level object captured: 0x{level_object:08X}")
-                                clear_hardware_breakpoint(th, 0)
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
-
-        elif event_code == 3:  # CREATE_PROCESS_DEBUG_EVENT
-            set_bp_on_thread(tid, target, 0)
-
-        ctypes.windll.kernel32.ContinueDebugEvent(
-            debug_event.dwProcessId, tid, DBG_CONTINUE
-        )
-
-        if level_object is not None:
-            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-            break
-
-    return level_object
-
-
-def capture_max_stage_object(pm: pymem.Pymem, base: int, stop_event: threading.Event) -> Optional[int]:
-    target = base + MAX_STAGE_OFFSET
-    logger.info(f"[FF2] Waiting for level completion to capture max stage object (0x{target:08X})...")
-
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        logger.error(f"[FF2] Failed to attach debugger: {ctypes.windll.kernel32.GetLastError()}")
-        return None
-
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
-
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, 0)
-
-    max_stage_address = None
-    debug_event       = DEBUG_EVENT()
-
-    while not stop_event.is_set() and max_stage_address is None:
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
-
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
-
-        if event_code == 2:
-            pass
-
-        elif event_code == 1:
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            if exc_addr == target and code not in (0x80000003,):
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx = CONTEXT()
-                            ctx.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx)) and ctx.Eip == target:
-                                ecx       = ctx.Ecx
-                                candidate = ecx + OFFSET_MAX_STAGE
-                                value     = read_int(pm, candidate)
-                                if 0 <= value <= 100:
-                                    max_stage_address = candidate
-                                    logger.info(f"[FF2] Max stage captured: 0x{max_stage_address:08X} = {value}")
-                                    clear_hardware_breakpoint(th, 0)
-                                else:
-                                    logger.warning(f"[FF2] Ignoring bad max stage capture: value={value}")
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
-
-        elif event_code == 3:
-            set_bp_on_thread(tid, target, 0)
-
-        ctypes.windll.kernel32.ContinueDebugEvent(
-            debug_event.dwProcessId, tid, DBG_CONTINUE
-        )
-
-        if max_stage_address is not None:
-            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-            break
-
-    return max_stage_address
 
 
 # ── Game logic helpers ────────────────────────────────────────────────────────
@@ -563,21 +52,7 @@ def location_id_for(level_id: int, slot: int) -> int:
     return LOC_BASE + (level_id * 3) + slot
 
 
-def reset_to_boundary_level(pm: pymem.Pymem, level_obj: int) -> None:
-    score_snapshot = read_int(pm, level_obj + OFFSET_SCORE_SNAPSHOT)
-    lives_snapshot = read_int(pm, level_obj + OFFSET_LIVES_SNAPSHOT)
-    current_level  = read_int(pm, level_obj + OFFSET_LEVEL_ID)
-    write_int(pm, level_obj + OFFSET_LEVEL_ID, current_level - 1)
-    write_int(pm, level_obj + OFFSET_SCORE,    score_snapshot)
-    write_int(pm, level_obj + OFFSET_LIVES,    lives_snapshot)
-    write_int(pm, level_obj + OFFSET_PROGRESS, 0)
-    logger.info(f"[FF2] Boundary reached — resetting to level {current_level} replay")
-
-
 # ── Native hook install / launch ──────────────────────────────────────────────
-# The boundary gate now also runs synchronously in-process (ff2ap_hooks.dll,
-# loaded via a dsound.dll search-order proxy — see native/). The functions above
-# stay in place as a reactive backstop; this is the primary enforcement path.
 
 def _native_package_dir() -> Path:
     return Path(__file__).parent / "native"
@@ -661,26 +136,14 @@ class FF2CommandProcessor(ClientCommandProcessor):
     def _cmd_fullscreen(self):
         """Toggle borderless windowed fullscreen with scaled mouse input."""
         ctx: FF2Context = self.ctx
-        if not ctx.pm or not ctx.base:
-            logger.info("[FF2] Game not ready.")
-            return
-        ctx._toggle_fullscreen()
+        ctx._send_native("TOGGLE_FULLSCREEN")
 
     def _cmd_status(self):
-        """Show current game state."""
+        """Show current game state (as of the last update received from the game)."""
         ctx: FF2Context = self.ctx
-        if not ctx.game_ready:
-            logger.info("[FF2] Game not ready yet.")
-            return
-        pm  = ctx.pm
-        obj = ctx.level_obj
-        logger.info(f"Lives:    {read_int(pm, obj + OFFSET_LIVES)}")
-        logger.info(f"Score:    {read_int(pm, obj + OFFSET_SCORE)}")
-        logger.info(f"Stage:    {read_int(pm, obj + OFFSET_STAGE)}")
-        logger.info(f"Level ID: {read_int(pm, obj + OFFSET_LEVEL_ID)} (1-indexed: {read_int(pm, obj + OFFSET_LEVEL_ID) + 1})")
-        logger.info(f"Progress: {read_int(pm, obj + OFFSET_PROGRESS)}")
-        if ctx.max_stage_addr:
-            logger.info(f"MaxStage: {read_int(pm, ctx.max_stage_addr)}")
+        logger.info(f"Native hooks connected: {bool(ctx._native_writers)}")
+        logger.info(f"Last known level (1-indexed): {ctx.last_known_level + 1 if ctx.last_known_level is not None else '?'}")
+        logger.info(f"Last known stage: {ctx.last_known_stage}")
         logger.info(f"Fish received: {ctx.fish_received}")
         logger.info(f"Max allowed stage: {max_allowed_stage(ctx.fish_received)}")
 
@@ -695,52 +158,26 @@ class FF2Context(CommonContext):
     def __init__(self, server_address: Optional[str], password: Optional[str]):
         super().__init__(server_address, password)
 
-        # game state
-        self.pm:              Optional[pymem.Pymem] = None
-        self.level_obj:       Optional[int]         = None
-        self.max_stage_addr:  Optional[int]         = None
-        self.fish_received:   int                   = 0
-        self.game_ready:      bool                  = False
+        # item/progression state
+        self.fish_received:   int  = 0
+        self.dash_received:   bool = False
+        self.suck_received:   bool = False
 
-        # native hook IPC (ff2ap_hooks.dll) — synchronous boundary enforcement
-        self._native_server:  Optional[asyncio.AbstractServer]     = None
-        self._native_writers: List[asyncio.StreamWriter]           = []
+        # native hook IPC (ff2ap_hooks.dll) — all game-memory access happens there now
+        self._native_server:  Optional[asyncio.AbstractServer] = None
+        self._native_writers: List[asyncio.StreamWriter]       = []
 
-        # watcher state
-        self._stop_event                    = threading.Event()
-        self._last_level_id:                Optional[int] = None
-        self._last_stage:                   Optional[int] = None
-        self._last_max_stage:               Optional[int] = None
-        self._last_lives:                   Optional[int] = None
-        self._stable_level_id:              Optional[int] = None
-        self._stable_count:                 int           = 0
-        self._completed_levels:             set           = set()
-        self._completed_stages:             set           = set()
-        self._death_link_enabled:           bool          = False
-        self._death_link_written_lives:     Optional[int] = False
+        # dedup / bookkeeping for checks reported over IPC
+        self._completed_levels:   set  = set()
+        self._completed_stages:   set  = set()
+        self._death_link_enabled: bool = False
 
-        # boss state
-        self.boss_hp_addr:       Optional[int] = None
-        self._boss_hp_capturing: bool          = False
-
-        # fishy state
-        self.player_fish:    Optional[int] = None
-        self.sub_object:     Optional[int] = None
-
-        # ability state
-        self.base:           Optional[int] = None
-        self.dash_received:  bool          = False
-        self.suck_received:  bool          = False
+        # last-known state for /status — updated as native messages arrive, not live-polled
+        self.last_known_level: Optional[int] = None
+        self.last_known_stage: Optional[int] = None
 
         # shuffle state (persists across game restarts — same seed = same shuffle)
-        self.level_shuffle:      Optional[List[int]] = None
-        self._shuffle_cave_addr: Optional[int]       = None
-
-        # fullscreen / scalemouse / centerfix state (reset on game process restart)
-        self._borderless_saved:  dict            = {}
-        self._mouse_cave:        Optional[int]   = None
-        self._centerfix_cave:    Optional[tuple] = None
-        self._setcursorpos_real: Optional[int]   = None
+        self.level_shuffle: Optional[List[int]] = None
 
     async def server_auth(self, password_requested: bool = False):
         if password_requested and not self.password:
@@ -757,8 +194,7 @@ class FF2Context(CommonContext):
             shuffle = slot_data.get("level_shuffle")
             if shuffle:
                 self.level_shuffle = shuffle
-                if self.game_ready and self.base and self.pm:
-                    self._install_shuffle_hook(shuffle)
+                self._push_shuffle()
             logger.info(f"[FF2] Connected. DeathLink: {self._death_link_enabled}")
 
         elif cmd == "ReceivedItems":
@@ -767,185 +203,36 @@ class FF2Context(CommonContext):
                 self.fish_received = 0  # full resend — recount from scratch
                 self.dash_received = False
                 self.suck_received = False
-                if self.game_ready and self.base:
-                    self._block_dash()
-                    self._block_suck()
             for item in args["items"]:
                 item_id = item.item
                 if item_id == ITEM_PROGRESSIVE_FISH:
                     self.fish_received += 1
                     logger.info(f"[FF2] Received Progressive Fish ({self.fish_received} total)")
-                    if self.game_ready and self.max_stage_addr:
-                        self._apply_fish_item()
                 elif item_id == ITEM_1UP:
                     logger.info("[FF2] Received 1-Up")
-                    if not is_full_resend and self.game_ready and self.level_obj:
-                        self._apply_1up()
+                    if not is_full_resend:
+                        self._send_native("APPLY_1UP")
                 elif item_id == ITEM_DASH:
                     self.dash_received = True
                     logger.info("[FF2] Received Dash")
-                    if self.game_ready and self.base:
-                        self._unblock_dash()
                 elif item_id == ITEM_SUCK:
                     self.suck_received = True
                     logger.info("[FF2] Received Suck")
-                    if self.game_ready and self.base:
-                        self._unblock_suck()
             self._push_allowed_max()
+            self._push_ability_state()
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
                 source = args.get("data", {}).get("source", "")
                 if source == self.player_names.get(self.slot, ""):
                     return
-                self._receive_death_link()
-
-
-    def _block_dash(self):
-        try:
-            write_bytes(self.pm, self.base + DASH_CALL_OFFSET, DASH_BLOCKED)
-            logger.info("[FF2] Dash blocked")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to block dash: {e}")
-
-    def _unblock_dash(self):
-        try:
-            write_bytes(self.pm, self.base + DASH_CALL_OFFSET, DASH_UNBLOCKED)
-            logger.info("[FF2] Dash unblocked")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to unblock dash: {e}")
-
-    def _block_suck(self):
-        try:
-            write_bytes(self.pm, self.base + SUCK_CALL_OFFSET, SUCK_BLOCKED)
-            logger.info("[FF2] Suck blocked")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to block suck: {e}")
-
-    def _unblock_suck(self):
-        try:
-            write_bytes(self.pm, self.base + SUCK_CALL_OFFSET, SUCK_UNBLOCKED)
-            logger.info("[FF2] Suck unblocked")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to unblock suck: {e}")
+                self._send_native("DEATH_LINK_TRIGGER")
 
     def _content_level(self, slot: int) -> int:
         """Map a map-slot level ID to the content level ID for that slot."""
         if self.level_shuffle and 0 <= slot < len(self.level_shuffle):
             return self.level_shuffle[slot]
         return slot
-
-    def _install_shuffle_hook(self, shuffle: List[int]) -> bool:
-        if self._shuffle_cave_addr:
-            self._remove_shuffle_hook()
-
-        pm   = self.pm
-        base = self.base
-
-        TOTAL = 60 + 30 + 30 + 31  # table + cave1 + cave2 + cave3
-        block = ctypes.windll.kernel32.VirtualAllocEx(
-            pm.process_handle, None, TOTAL,
-            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
-        )
-        if not block:
-            logger.error("[FF2] Shuffle hook: alloc failed")
-            return False
-
-        table_addr = block
-        cave1_addr = block + 60
-        cave2_addr = block + 60 + 30
-        cave3_addr = block + 60 + 30 + 30
-
-        written = ctypes.c_size_t(0)
-        ctypes.windll.kernel32.WriteProcessMemory(
-            pm.process_handle, ctypes.c_void_p(table_addr),
-            bytes(shuffle[:60]), 60, ctypes.byref(written),
-        )
-
-        cave1, cave2, cave3 = _build_shuffle_caves(table_addr)
-        ctypes.windll.kernel32.WriteProcessMemory(
-            pm.process_handle, ctypes.c_void_p(cave1_addr),
-            cave1, len(cave1), ctypes.byref(written),
-        )
-        ctypes.windll.kernel32.WriteProcessMemory(
-            pm.process_handle, ctypes.c_void_p(cave2_addr),
-            cave2, len(cave2), ctypes.byref(written),
-        )
-        ctypes.windll.kernel32.WriteProcessMemory(
-            pm.process_handle, ctypes.c_void_p(cave3_addr),
-            cave3, len(cave3), ctypes.byref(written),
-        )
-
-        # Site 1: 0x49AB70 — 5 bytes → call cave1
-        site1 = base + SHUFFLE_SITE1_OFFSET
-        rel1  = (cave1_addr - (site1 + 5)) & 0xFFFFFFFF
-        write_bytes(pm, site1, b'\xE8' + struct.pack('<I', rel1))
-
-        # Site 2: 0x40510A — 5 bytes → call cave2
-        site2 = base + SHUFFLE_SITE2_OFFSET
-        rel2  = (cave2_addr - (site2 + 5)) & 0xFFFFFFFF
-        write_bytes(pm, site2, b'\xE8' + struct.pack('<I', rel2))
-
-        # Site 3: 0x403468 — 7 bytes → call cave3 + nop + nop
-        site3 = base + SHUFFLE_SITE3_OFFSET
-        rel3  = (cave3_addr - (site3 + 5)) & 0xFFFFFFFF
-        write_bytes(pm, site3, b'\xE8' + struct.pack('<I', rel3) + b'\x90\x90')
-
-        self._shuffle_cave_addr = block
-        logger.info(f"[FF2] Shuffle hook installed (block: 0x{block:08X}  sites: 0x{site1:08X} 0x{site2:08X} 0x{site3:08X})")
-        return True
-
-    def _remove_shuffle_hook(self) -> None:
-        cave = self._shuffle_cave_addr
-        if not cave:
-            return
-        if self.pm and self.base:
-            try:
-                write_bytes(self.pm, self.base + SHUFFLE_SITE1_OFFSET, SHUFFLE_SITE1_ORIGINAL)
-            except Exception:
-                pass
-            try:
-                write_bytes(self.pm, self.base + SHUFFLE_SITE2_OFFSET, SHUFFLE_SITE2_ORIGINAL)
-            except Exception:
-                pass
-            try:
-                write_bytes(self.pm, self.base + SHUFFLE_SITE3_OFFSET, SHUFFLE_SITE3_ORIGINAL)
-            except Exception:
-                pass
-        try:
-            ctypes.windll.kernel32.VirtualFreeEx(
-                self.pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000,
-            )
-        except Exception:
-            pass
-        self._shuffle_cave_addr = None
-        logger.info("[FF2] Shuffle hook removed")
-
-    def _apply_fish_item(self):
-        try:
-            allowed = max_allowed_stage(self.fish_received)
-            current = read_int(self.pm, self.max_stage_addr)
-            if current < allowed:
-                # check if the gateway level (last level of previous zone) is already completed
-                # if so, set directly to the new boundary so player doesn't have to replay it
-                new_zone_start = ZONE_BOUNDARIES[self.fish_received] if self.fish_received < len(ZONE_BOUNDARIES) else 999
-                gateway_level_id = new_zone_start - 1  # 0-indexed
-                if gateway_level_id in self._completed_levels:
-                    write_int(self.pm, self.max_stage_addr, new_zone_start)
-                    logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage set to {new_zone_start} (gateway already cleared)")
-                # else:
-                #     write_int(self.pm, self.max_stage_addr, allowed)
-                #     logger.info(f"[FF2] Fish zone unlocked — mode0MaxStage: {allowed}")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to apply fish item: {e}")
-
-    def _apply_1up(self):
-        try:
-            current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
-            write_int(self.pm, self.level_obj + OFFSET_LIVES, current + 1)
-            logger.info(f"[FF2] 1-Up applied — lives: {current + 1}")
-        except Exception as e:
-            logger.error(f"[FF2] Failed to apply 1-Up: {e}")
 
     def _send_location(self, location_id: int):
         Utils.async_start(self.send_msgs([{
@@ -959,11 +246,25 @@ class FF2Context(CommonContext):
             "status": 30,  # ClientStatus.CLIENT_GOAL
         }]))
 
+    def _send_death_link(self):
+        if self._death_link_enabled:
+            logger.info("[FF2] DeathLink sent")
+            Utils.async_start(self.send_msgs([{
+                "cmd": "Bounce",
+                "tags": ["DeathLink"],
+                "data": {
+                    "time":   asyncio.get_event_loop().time(),
+                    "cause":  "Lost a life",
+                    "source": self.player_names.get(self.slot, "FF2 Player"),
+                },
+            }]))
+
     # ── Native hook IPC ────────────────────────────────────────────────────────
-    # ff2ap_hooks.dll connects here once injected. It enforces the fish boundary
-    # synchronously in-process; this link exists to (a) tell it the current
-    # allowed max and (b) receive the completion check for whatever gateway
-    # level a boundary-crossing attempt was blocked at.
+    # ff2ap_hooks.dll connects here once injected. Every piece of gameplay-affecting
+    # logic (boundary gate, dash/suck gating, level shuffle, DeathLink, boss/goal
+    # detection, stage/level-completion tracking, fullscreen) runs in-process on the
+    # DLL side; this link exists to keep it in sync with AP item/connection state and
+    # to receive the events it detects.
 
     async def _start_native_server(self) -> None:
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -971,7 +272,12 @@ class FF2Context(CommonContext):
             self._native_writers.append(writer)
             try:
                 writer.write(f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}\n".encode())
+                writer.write(f"DASH_ENABLED {int(self.dash_received)}\n".encode())
+                writer.write(f"SUCK_ENABLED {int(self.suck_received)}\n".encode())
+                if self.level_shuffle:
+                    writer.write((f"SHUFFLE {','.join(str(v) for v in self.level_shuffle[:60])}\n").encode())
                 await writer.drain()
+
                 buf = b""
                 while True:
                     chunk = await reader.read(512)
@@ -992,32 +298,82 @@ class FF2Context(CommonContext):
 
     def _handle_native_line(self, line: str) -> None:
         line = line.strip()
+        if not line:
+            return
+
         if line.startswith("LOG "):
             logger.info(f"[FF2-native] {line[4:]}")
             return
-        if not line.startswith("LEVEL_COMPLETE "):
-            return
-        try:
-            completed_id = int(line.split(" ", 1)[1])
-        except ValueError:
-            return
-        if completed_id in self._completed_levels:
-            return
-        self._completed_levels.add(completed_id)
-        content_lvl = self._content_level(completed_id)
-        loc_id      = location_id_for(content_lvl, 2)
-        self._send_location(loc_id)
-        logger.info(f"[FF2] Check (native boundary): Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
 
-    def _push_allowed_max(self) -> None:
+        if line.startswith("LEVEL_COMPLETE "):
+            try:
+                completed_id = int(line.split(" ", 1)[1])
+            except ValueError:
+                return
+            self.last_known_level = completed_id
+            if completed_id in self._completed_levels:
+                return
+            self._completed_levels.add(completed_id)
+            content_lvl = self._content_level(completed_id)
+            self._send_location(location_id_for(content_lvl, 2))
+            logger.info(f"[FF2] Check: Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
+            return
+
+        if line.startswith("STAGE_COMPLETE "):
+            parts = line.split(" ")
+            if len(parts) != 3:
+                return
+            try:
+                level_id, stage = int(parts[1]), int(parts[2])
+            except ValueError:
+                return
+            self.last_known_level = level_id
+            self.last_known_stage = stage
+            check_key = (level_id, stage)
+            if check_key in self._completed_stages:
+                return
+            self._completed_stages.add(check_key)
+            content_lvl = self._content_level(level_id)
+            if (content_lvl + 1) in BONUS_LEVELS:
+                return  # bonus levels only get a Complete check, not per-stage
+            self._send_location(location_id_for(content_lvl, stage - 1))
+            logger.info(f"[FF2] Check: Slot {level_id + 1} → Content {content_lvl + 1} Stage {stage}")
+            return
+
+        if line == "GOAL":
+            self._send_goal()
+            logger.info("[FF2] Boss defeated — goal sent!")
+            return
+
+        if line.startswith("DEATH_LINK_SEND"):
+            # Echo suppression (a death we caused via an incoming DeathLink shouldn't
+            # bounce back out as a new one) happens natively now — see
+            # state::g_deathlink_suppress_lives in native/ff2ap_hooks/state.h. Every
+            # DEATH_LINK_SEND that reaches here is a genuine, locally-caused death.
+            self._send_death_link()
+            return
+
+    def _send_native(self, message: str) -> None:
         if not self._native_writers:
             return
-        msg = f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}\n".encode()
+        data = (message + "\n").encode()
         for writer in list(self._native_writers):
             try:
-                writer.write(msg)
+                writer.write(data)
             except (ConnectionResetError, BrokenPipeError):
                 pass
+
+    def _push_allowed_max(self) -> None:
+        self._send_native(f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}")
+
+    def _push_ability_state(self) -> None:
+        self._send_native(f"DASH_ENABLED {int(self.dash_received)}")
+        self._send_native(f"SUCK_ENABLED {int(self.suck_received)}")
+
+    def _push_shuffle(self) -> None:
+        if not self.level_shuffle:
+            return
+        self._send_native(f"SHUFFLE {','.join(str(v) for v in self.level_shuffle[:60])}")
 
     # ── GUI ────────────────────────────────────────────────────────────────────
 
@@ -1043,641 +399,6 @@ class FF2Context(CommonContext):
         self.ui = FF2Manager(self)
         self.ui_task = asyncio.create_task(self.ui.async_run(), name="UI")
 
-    def _send_death_link(self):
-        if self._death_link_enabled:
-            logger.info(f"[FF2] DeathLink sent (lives: {self._last_lives} -> {self._last_lives - 1})")
-            Utils.async_start(self.send_msgs([{
-                "cmd": "Bounce",
-                "tags": ["DeathLink"],
-                "data": {
-                    "time":   asyncio.get_event_loop().time(),
-                    "cause":  "Lost a life",
-                    "source": self.player_names.get(self.slot, "FF2 Player"),
-                },
-            }]))
-
-    def _receive_death_link(self) -> None:
-        if not self.game_ready:
-            logger.info("[FF2] DeathLink — game not ready, dropping"); return
-
-        player_fish = self.player_fish
-        sub_object  = self.sub_object
-
-        if player_fish is None or sub_object is None:
-            logger.info("[FF2] DeathLink — no valid fish pointer, dropping"); return
-
-        if not self.level_obj:
-            logger.info("[FF2] DeathLink — no level object, dropping"); return
-
-        try:
-            level_id    = read_int(self.pm, self.level_obj + OFFSET_LEVEL_ID)
-            content_id  = self._content_level(level_id)
-            if (content_id + 1) in BONUS_LEVELS:
-                logger.info(f"[FF2] DeathLink — bonus content {content_id + 1} at slot {level_id + 1}, dropping"); return
-        except Exception:
-            return
-
-        try:
-            alive_ptr = read_int(self.pm, sub_object + OFFSET_ALIVE_PTR)
-        except Exception as e:
-            logger.error(f"[FF2] DeathLink — alive_ptr read failed: {e}"); return
-
-        if alive_ptr == 0:
-            logger.info("[FF2] DeathLink — player not spawned, dropping"); return
-
-        try:
-            current = read_int(self.pm, self.level_obj + OFFSET_LIVES)
-            self._death_link_written_lives = max(0, current - 1)
-            trigger_death(self.pm, player_fish, sub_object)
-            logger.info("[FF2] DeathLink — death triggered")
-        except Exception as e:
-            logger.error(f"[FF2] DeathLink apply failed: {e}")
-
-    # ── Fullscreen / scalemouse / centerfix ───────────────────────────────────
-
-    def _toggle_fullscreen(self) -> None:
-        hwnd = _game_hwnd()
-        if not hwnd:
-            logger.info("[FF2] Game window not found"); return
-        if self._mouse_cave is None:
-            if not self._apply_borderless(hwnd):
-                return
-            self._install_mouse_scale(hwnd)
-            self._install_centerfix(hwnd)
-        else:
-            self._remove_centerfix()
-            self._remove_mouse_scale()
-            self._remove_borderless(hwnd)
-
-    def _apply_borderless(self, hwnd: int) -> bool:
-        user32 = ctypes.windll.user32
-        if hwnd in self._borderless_saved:
-            return True
-        style = user32.GetWindowLongA(hwnd, GWL_STYLE)
-        rect  = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        self._borderless_saved[hwnd] = (style, rect)
-        mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
-        mi  = MONITORINFO()
-        mi.cbSize = ctypes.sizeof(MONITORINFO)
-        user32.GetMonitorInfoA(mon, ctypes.byref(mi))
-        r = mi.rcMonitor
-        new_style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
-                                WS_MAXIMIZEBOX | WS_SYSMENU)) | WS_POPUP
-        user32.SetWindowLongA(hwnd, GWL_STYLE, new_style)
-        user32.SetWindowPos(hwnd, 0, r.left, r.top,
-            r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_FRAMECHANGED)
-        user32.ClipCursor(None)
-        logger.info(f"[FF2] Borderless fullscreen {r.right - r.left}x{r.bottom - r.top}")
-        return True
-
-    def _remove_borderless(self, hwnd: int) -> None:
-        user32 = ctypes.windll.user32
-        if hwnd not in self._borderless_saved:
-            return
-        style, rect = self._borderless_saved.pop(hwnd)
-        user32.SetWindowLongA(hwnd, GWL_STYLE, style)
-        user32.SetWindowPos(hwnd, 0, rect.left, rect.top,
-            rect.right - rect.left, rect.bottom - rect.top,
-            SWP_NOZORDER | SWP_FRAMECHANGED)
-        logger.info("[FF2] Restored windowed mode")
-
-    def _install_mouse_scale(self, hwnd: int) -> None:
-        pm, base = self.pm, self.base
-        if self._mouse_cave is not None:
-            return
-        block = ctypes.windll.kernel32.VirtualAllocEx(
-            pm.process_handle, None, 128,
-            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
-        )
-        if not block:
-            logger.error(f"[FF2] scalemouse: alloc failed: {ctypes.windll.kernel32.GetLastError()}")
-            return
-        write_bytes(pm, block + 8, _build_mouse_cave(block, base))
-        site = base + WNDPROC_OFFSET
-        rel  = (block + 8 - (site + 5)) & 0xFFFFFFFF
-        write_bytes(pm, site, bytes([0xE9]) + struct.pack('<I', rel) + bytes([0x90]))
-        self._mouse_cave = block
-        self._update_mouse_scale(hwnd)
-        logger.info(f"[FF2] scalemouse: hook installed (cave=0x{block:08X})")
-
-    def _update_mouse_scale(self, hwnd: int) -> None:
-        if self._mouse_cave is None:
-            return
-        cw, ch = _client_size(hwnd)
-        if cw <= 0 or ch <= 0:
-            return
-        sx = max(1, round(800 * 65536 / cw))
-        sy = max(1, round(600 * 65536 / ch))
-        write_int(self.pm, self._mouse_cave + 0, sx)
-        write_int(self.pm, self._mouse_cave + 4, sy)
-        logger.info(f"[FF2] scalemouse: {cw}x{ch} -> 800x600 (sx={sx} sy={sy})")
-
-    def _remove_mouse_scale(self) -> None:
-        if self._mouse_cave is None:
-            return
-        write_bytes(self.pm, self.base + WNDPROC_OFFSET, WNDPROC_ORIGINAL)
-        ctypes.windll.kernel32.VirtualFreeEx(
-            self.pm.process_handle, ctypes.c_void_p(self._mouse_cave), 0, MEM_RELEASE,
-        )
-        self._mouse_cave = None
-        logger.info("[FF2] scalemouse: hook removed")
-
-    def _install_centerfix(self, hwnd: int) -> None:
-        pm, base = self.pm, self.base
-        if self._centerfix_cave is not None:
-            return
-        slot = base + IAT_SETCURSORPOS
-        if self._setcursorpos_real is None:
-            self._setcursorpos_real = read_int(pm, slot)
-        real = self._setcursorpos_real
-        cave = ctypes.windll.kernel32.VirtualAllocEx(
-            pm.process_handle, None, 128,
-            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE,
-        )
-        if not cave:
-            logger.error(f"[FF2] centerfix: alloc failed: {ctypes.windll.kernel32.GetLastError()}")
-            return
-        write_int(pm, cave + 8, real)
-        write_int(pm, cave + 12, 1)
-        write_bytes(pm, cave + 28, _build_centerfix_cave(cave))
-        old = wintypes.DWORD(0)
-        ctypes.windll.kernel32.VirtualProtectEx(
-            pm.process_handle, ctypes.c_void_p(slot), 4,
-            PAGE_EXECUTE_READWRITE, ctypes.byref(old),
-        )
-        write_int(pm, slot, cave + 28)
-        ctypes.windll.kernel32.VirtualProtectEx(
-            pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
-        )
-        got = read_int(pm, slot)
-        if got != (cave + 28) & 0xFFFFFFFF:
-            logger.error(f"[FF2] centerfix: IAT write FAILED (got=0x{got:08X})")
-        else:
-            logger.info(f"[FF2] centerfix: IAT repointed (slot 0x{slot:08X} -> 0x{cave+28:08X}, real=0x{real:08X})")
-        self._centerfix_cave = (cave, real)
-        self._update_centerfix(hwnd)
-
-    def _update_centerfix(self, hwnd: int) -> None:
-        if self._centerfix_cave is None:
-            return
-        cx, cy = _client_center_screen(hwnd)
-        cave = self._centerfix_cave[0]
-        write_int(self.pm, cave + 0, cx)
-        write_int(self.pm, cave + 4, cy)
-        logger.info(f"[FF2] centerfix: true client center = screen ({cx},{cy})")
-
-    def _remove_centerfix(self) -> None:
-        if self._centerfix_cave is None:
-            return
-        pm, base = self.pm, self.base
-        cave, real = self._centerfix_cave
-        slot = base + IAT_SETCURSORPOS
-        old  = wintypes.DWORD(0)
-        ctypes.windll.kernel32.VirtualProtectEx(
-            pm.process_handle, ctypes.c_void_p(slot), 4,
-            PAGE_EXECUTE_READWRITE, ctypes.byref(old),
-        )
-        write_int(pm, slot, real)
-        ctypes.windll.kernel32.VirtualProtectEx(
-            pm.process_handle, ctypes.c_void_p(slot), 4, old.value, ctypes.byref(old),
-        )
-        got = read_int(pm, slot)
-        if got == real & 0xFFFFFFFF:
-            ctypes.windll.kernel32.VirtualFreeEx(
-                pm.process_handle, ctypes.c_void_p(cave), 0, MEM_RELEASE,
-            )
-        else:
-            logger.warning(f"[FF2] centerfix: restore verify failed (got=0x{got:08X})")
-        self._centerfix_cave = None
-        logger.info(f"[FF2] centerfix: restored (slot -> 0x{got:08X})")
-
-# ── Shuffle cave builder ──────────────────────────────────────────────────────
-
-def _build_shuffle_caves(table_addr: int):
-    """
-    Build x86 machine code for the three read-side remap caves.
-    Never alters level_obj+0x28 — only remaps at read time.
-
-    Cave 1 (30 bytes) — patches 0x49AB70
-      Replaces: mov ecx,[eax+28]; test ecx,ecx  (5 bytes)
-      Entry: EAX=level_obj  Exit: ECX=shuffle[slot], flags set by test ecx,ecx
-      Returns to 0x49AB75 (jl 0x49AB83)
-
-    Cave 2 (30 bytes) — patches 0x40510A
-      Replaces: mov eax,[edi]; mov ecx,[eax+28]  (5 bytes)
-      Entry: EDI=&level_obj  Exit: EAX=level_obj, ECX=shuffle[slot]
-      Returns to 0x40510F (test ecx,ecx; jl ...)
-
-    Cave 3 (31 bytes) — patches 0x403468  (7-byte patch: call+nop+nop)
-      Replaces: push esi; push [eax+28]; lea esi,[eax+50]
-      Entry: EAX=level_obj  Sets up stack/ESI identically but pushes shuffle[slot]
-      Returns to 0x40346F (call 0x483BD0)
-    """
-    ta = struct.pack('<I', table_addr)
-
-    # Cave 1 — 0x49AB70 (30 bytes)
-    cave1 = (
-        b'\x52'             # push edx
-        b'\x8B\x50\x28'    # mov edx,[eax+28]
-        b'\x8B\xCA'        # mov ecx,edx          (default passthrough)
-        b'\x85\xD2'        # test edx,edx
-        b'\x78\x10'        # js .done  (+16 → byte 26)
-        b'\x83\xFA\x3B'    # cmp edx,59
-        b'\x77\x0B'        # ja .done  (+11 → byte 26)
-        b'\x50'            # push eax
-        b'\xB8' + ta +     # mov eax,table_addr
-        b'\x0F\xB6\x0C\x10'  # movzx ecx,byte[eax+edx]
-        b'\x58'            # pop eax
-        b'\x5A'            # pop edx              (.done)
-        b'\x85\xC9'        # test ecx,ecx         (flags for jl at 49AB75)
-        b'\xC3'            # ret
-    )
-    assert len(cave1) == 30, f"cave1 size {len(cave1)}"
-
-    # Cave 2 — 0x40510A (30 bytes)
-    # after ret: 0x40510F = test ecx,ecx; jl ...  (EAX still = level_obj)
-    cave2 = (
-        b'\x8B\x07'        # mov eax,[edi]         (restore original 1st instr)
-        b'\x52'            # push edx
-        b'\x8B\x50\x28'   # mov edx,[eax+28]
-        b'\x8B\xCA'       # mov ecx,edx           (default passthrough)
-        b'\x85\xD2'       # test edx,edx
-        b'\x78\x10'       # js .done  (+16 → byte 28)
-        b'\x83\xFA\x3B'   # cmp edx,59
-        b'\x77\x0B'       # ja .done  (+11 → byte 28)
-        b'\x50'           # push eax
-        b'\xB8' + ta +    # mov eax,table_addr
-        b'\x0F\xB6\x0C\x10'  # movzx ecx,byte[eax+edx]
-        b'\x58'           # pop eax
-        b'\x5A'           # pop edx               (.done)
-        b'\xC3'           # ret
-    )
-    assert len(cave2) == 30, f"cave2 size {len(cave2)}"
-
-    # Cave 3 — 0x403468 (31 bytes), 7-byte patch (call cave3 + nop + nop)
-    # Stack on entry: [ESP]=ret_addr(0x40346D), EAX=level_obj
-    # Stack on exit:  [ESP]=ret_addr, [ESP+4]=content_id, [ESP+8]=old_esi
-    # ESI = level_obj+0x50; returns to nop nop; call 0x483BD0 at 0x40346F
-    cave3 = (
-        b'\x59'            # pop ecx               (save ret addr = 0x40346D)
-        b'\x56'            # push esi              (old ESI at EBP-8, frame expects it here)
-        b'\x8B\x50\x28'   # mov edx,[eax+28]      (slot)
-        b'\x85\xD2'       # test edx,edx
-        b'\x78\x10'       # js .pass  (+16 → byte 25)
-        b'\x83\xFA\x3B'   # cmp edx,59
-        b'\x77\x0B'       # ja .pass  (+11 → byte 25)
-        b'\x50'           # push eax
-        b'\xB8' + ta +    # mov eax,table_addr
-        b'\x0F\xB6\x14\x10'  # movzx edx,byte[eax+edx]
-        b'\x58'           # pop eax
-        b'\x52'           # push edx              (.pass — content_id arg at EBP-12)
-        b'\x8D\x70\x50'   # lea esi,[eax+50]      (array ptr for 0x483BD0)
-        b'\x51'           # push ecx              (re-push ret addr)
-        b'\xC3'           # ret
-    )
-    assert len(cave3) == 31, f"cave3 size {len(cave3)}"
-
-    return cave1, cave2, cave3
-
-
-# ── Deathlink routine ───────────────────────────────────────────────────────────────
-def trigger_death(pm: pymem.Pymem, player_fish: int, sub_object: int) -> bool:
-    cave = ctypes.windll.kernel32.VirtualAllocEx(
-        pm.process_handle, None, 64,
-        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
-    )
-    if not cave:
-        return False
-
-    call_site  = cave + 6
-    rel_offset = (DEATH_FUNC - (call_site + 5)) & 0xFFFFFFFF
-
-    shellcode = bytearray([
-        0x51,
-        0xB9, *sub_object.to_bytes(4, 'little'),
-        0xE8, *rel_offset.to_bytes(4, 'little'),
-        0x59,
-        0xC3,
-    ])
-
-    written = ctypes.c_size_t(0)
-    ctypes.windll.kernel32.WriteProcessMemory(
-        pm.process_handle, ctypes.c_void_p(cave),
-        bytes(shellcode), len(shellcode), ctypes.byref(written)
-    )
-
-    thread = ctypes.windll.kernel32.CreateRemoteThread(
-        pm.process_handle, None, 0,
-        ctypes.c_void_p(cave), None, 0, None
-    )
-    if not thread:
-        ctypes.windll.kernel32.VirtualFreeEx(
-            pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
-        )
-        return False
-
-    ctypes.windll.kernel32.WaitForSingleObject(thread, 3000)
-    ctypes.windll.kernel32.CloseHandle(thread)
-    ctypes.windll.kernel32.VirtualFreeEx(
-        pm.process_handle, ctypes.c_void_p(cave), 0, 0x8000
-    )
-
-    write_int(pm, player_fish + OFFSET_RESPAWN_FLAG, 0)
-    return True
-
-# ── Game watcher loop ─────────────────────────────────────────────────────────
-
-async def game_watcher(ctx: FF2Context):
-    STABLE_THRESHOLD   = 3
-    CRASH_ERROR_THRESH = 5
-    loop = asyncio.get_event_loop()
-
-    while not ctx.exit_event.is_set():
-
-        # ── wait for / attach to game process ────────────────────────────
-        while not ctx.exit_event.is_set():
-            try:
-                ctx.pm = pymem.Pymem(PROCESS_NAME)
-                logger.info(f"[FF2] Attached to {PROCESS_NAME}")
-                break
-            except Exception:
-                logger.info(f"[FF2] Waiting for {PROCESS_NAME}...")
-                await asyncio.sleep(3)
-
-        if ctx.exit_event.is_set():
-            break
-
-        # reset game-session state (Archipelago state — fish_received, completed_*, etc. — preserved)
-        # level_shuffle is also preserved — same seed = same shuffle every session
-        ctx._stop_event.set()
-        ctx._stop_event      = threading.Event()
-        ctx.level_obj         = None
-        ctx.max_stage_addr    = None
-        ctx.player_fish       = None
-        ctx.sub_object        = None
-        ctx.game_ready        = False
-        ctx.boss_hp_addr      = None
-        ctx._boss_hp_capturing  = False
-        ctx._last_level_id    = None
-        ctx._last_stage       = None
-        ctx._last_max_stage   = None
-        ctx._last_lives       = None
-        ctx._stable_level_id  = None
-        ctx._stable_count     = 0
-        ctx._shuffle_cave_addr = None   # old process memory is gone; reinstall on next ready
-        ctx._borderless_saved  = {}
-        ctx._mouse_cave        = None
-        ctx._centerfix_cave    = None
-        ctx._setcursorpos_real = None
-
-        pm   = ctx.pm
-        base = pymem.process.module_from_name(pm.process_handle, PROCESS_NAME).lpBaseOfDll
-        logger.info(f"[FF2] Base address: 0x{base:08X}")
-        ctx.base = base   # fixed exe offsets (fullscreen/scalemouse/centerfix) are valid immediately
-
-        ctx.level_obj = await loop.run_in_executor(None, capture_level_object, pm, base)
-        if not ctx.level_obj:
-            logger.error("[FF2] Failed to capture level object.")
-            continue
-
-        ctx.game_ready = True
-        logger.info("[FF2] Game ready. Watching for checks...")
-
-        if ctx.level_shuffle:
-            ctx._install_shuffle_hook(ctx.level_shuffle)
-
-        ctx._block_dash()
-        if ctx.dash_received:
-            ctx._unblock_dash()
-        ctx._block_suck()
-        if ctx.suck_received:
-            ctx._unblock_suck()
-
-        if ctx.fish_received > 0 and ctx.max_stage_addr:
-            ctx._apply_fish_item()
-
-        async def _capture_max_stage():
-            result = await loop.run_in_executor(
-                None, capture_max_stage_object, pm, base, ctx._stop_event
-            )
-            if result:
-                ctx.max_stage_addr = result
-                if ctx.fish_received > 0:
-                    ctx._apply_fish_item()
-
-        Utils.async_start(_capture_max_stage())
-
-        async def _capture_player_fish():
-            target = base + PLAYER_FISH_OFFSET
-            result = await loop.run_in_executor(
-                None, _do_capture_player_fish, pm, target, ctx._stop_event
-            )
-            if result:
-                ctx.player_fish = result["player_fish"]
-                ctx.sub_object  = result["sub_object"]
-                logger.info(f"[FF2] Player fish: 0x{ctx.player_fish:08X} sub: 0x{ctx.sub_object:08X}")
-            if ctx.level_obj:
-                try:
-                    if read_int(pm, ctx.level_obj + OFFSET_LEVEL_ID) == 59 and not ctx._boss_hp_capturing:
-                        ctx.boss_hp_addr       = None
-                        ctx._boss_hp_capturing = True
-                        Utils.async_start(_capture_boss_hp())
-                except Exception:
-                    pass
-
-        Utils.async_start(_capture_player_fish())
-
-        async def _capture_boss_hp():
-            target = base + BOSS_HP_OFFSET
-            result = await loop.run_in_executor(
-                None, _do_capture_boss_hp, pm, target, ctx._stop_event
-            )
-            if result:
-                ctx.boss_hp_addr = result
-                logger.info(f"[FF2] Boss HP counter: 0x{result:08X}")
-            ctx._boss_hp_capturing = False
-
-        # ── main poll loop ───────────────────────────────────────────────
-        consecutive_errors = 0
-        while not ctx.exit_event.is_set():
-            try:
-                current_level = read_int(pm, ctx.level_obj + OFFSET_LEVEL_ID)
-                current_stage = read_int(pm, ctx.level_obj + OFFSET_STAGE)
-                current_lives = read_int(pm, ctx.level_obj + OFFSET_LIVES)
-                consecutive_errors = 0
-
-                # ── debounce level_id ─────────────────────────────────────
-                if current_level == ctx._stable_level_id:
-                    ctx._stable_count += 1
-                else:
-                    ctx._stable_level_id = current_level
-                    ctx._stable_count    = 1
-
-                if ctx._stable_count >= STABLE_THRESHOLD:
-                    current_level = ctx._stable_level_id
-
-                    # ── stage checks (stages 1 and 2 only) ───────────────
-                    if ctx._last_stage is not None and current_stage != ctx._last_stage:
-                        if current_stage in (1, 2):
-                            check_key = (current_level, current_stage)
-                            if check_key not in ctx._completed_stages:
-                                ctx._completed_stages.add(check_key)
-                                content_lvl = ctx._content_level(current_level)
-                                is_bonus    = (content_lvl + 1) in BONUS_LEVELS
-                                if not is_bonus:
-                                    loc_id = location_id_for(content_lvl, current_stage - 1)
-                                    ctx._send_location(loc_id)
-                                    logger.info(f"[FF2] Check: Slot {current_level + 1} → Content {content_lvl + 1} Stage {current_stage}")
-
-                    # ── level completion ──────────────────────────────────
-                    if ctx._last_level_id is not None and current_level == ctx._last_level_id + 1:
-                        completed_id = ctx._last_level_id
-                        if completed_id not in ctx._completed_levels:
-                            ctx._completed_levels.add(completed_id)
-                            content_lvl = ctx._content_level(completed_id)
-                            loc_id      = location_id_for(content_lvl, 2)
-                            ctx._send_location(loc_id)
-                            logger.info(f"[FF2] Check: Slot {completed_id + 1} → Content {content_lvl + 1} Complete")
-
-                        ctx.player_fish = None
-                        ctx.sub_object  = None
-                        logger.info("[FF2] Player pointers cleared — re-capturing for new level")
-                        Utils.async_start(_capture_player_fish())
-
-                    ctx._last_level_id = current_level
-                    ctx._last_stage    = current_stage
-
-                # ── boss defeat check ─────────────────────────────────────
-                if ctx.boss_hp_addr is not None and current_level == 59:
-                    try:
-                        if read_int(pm, ctx.boss_hp_addr) >= 20:
-                            ctx._send_goal()
-                            logger.info("[FF2] Boss defeated (20 hits) — goal sent!")
-                            ctx.boss_hp_addr = None  # prevent re-triggering
-                    except Exception:
-                        pass
-
-                # ── DeathLink send ────────────────────────────────────────
-                if ctx._last_lives is not None and current_lives == ctx._last_lives - 1:
-                    if ctx._death_link_written_lives == current_lives:
-                        ctx._death_link_written_lives = None
-                    else:
-                        ctx._send_death_link()
-                ctx._last_lives = current_lives
-
-                # ── clamp mode0MaxStage ───────────────────────────────────
-                if ctx.max_stage_addr is not None:
-                    current_max = read_int(pm, ctx.max_stage_addr)
-                    allowed = max_allowed_stage(ctx.fish_received)
-                    if current_max > allowed:
-                        write_int(pm, ctx.max_stage_addr, allowed)
-                        logger.info(f"[FF2] MaxStage clamped {current_max} -> {allowed}")
-                        reset_to_boundary_level(pm, ctx.level_obj)
-                    ctx._last_max_stage = current_max
-
-            except Exception as e:
-                consecutive_errors += 1
-                if consecutive_errors >= CRASH_ERROR_THRESH:
-                    logger.warning("[FF2] Game process lost — resetting and waiting to re-attach")
-                    ctx._stop_event.set()
-                    ctx.game_ready = False
-                    break
-                logger.debug(f"[FF2] Watcher error: {e}")
-
-            await asyncio.sleep(0.1)
-
-    ctx._stop_event.set()
-
-def _do_capture_boss_hp(pm, target, stop_event):
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        return None
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, 0)
-
-    result      = None
-    debug_event = DEBUG_EVENT()
-    while not stop_event.is_set() and result is None:
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
-        if event_code == 1:
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            if exc_addr == target and code not in (0x80000003,):
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx_ = CONTEXT()
-                            ctx_.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx_)) and ctx_.Eip == target:
-                                ecx = ctx_.Ecx
-                                if ecx:
-                                    result = ecx + OFFSET_BOSS_HP
-                                    clear_hardware_breakpoint(th, 0)
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
-        elif event_code == 3:
-            set_bp_on_thread(tid, target, 0)
-        ctypes.windll.kernel32.ContinueDebugEvent(
-            debug_event.dwProcessId, tid, DBG_CONTINUE
-        )
-        if result is not None:
-            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-            break
-    return result
-
-
-def _do_capture_player_fish(pm, target, stop_event):
-    if not ctypes.windll.kernel32.DebugActiveProcess(pm.process_id):
-        return None
-    ctypes.windll.kernel32.DebugSetProcessKillOnExit(False)
-    for tid in get_process_threads(pm.process_id):
-        set_bp_on_thread(tid, target, 0)
-
-    result      = None
-    debug_event = DEBUG_EVENT()
-    while not stop_event.is_set() and result is None:
-        if not ctypes.windll.kernel32.WaitForDebugEvent(ctypes.byref(debug_event), 100):
-            continue
-        event_code = debug_event.dwDebugEventCode
-        tid        = debug_event.dwThreadId
-        if event_code == 1:
-            code     = debug_event.u.Exception.ExceptionRecord.ExceptionCode
-            exc_addr = debug_event.u.Exception.ExceptionRecord.ExceptionAddress
-            if exc_addr == target and code not in (0x80000003,):
-                th = get_thread_handle(tid)
-                if th:
-                    if ctypes.windll.kernel32.SuspendThread(th) != 0xFFFFFFFF:
-                        try:
-                            ctx_ = CONTEXT()
-                            ctx_.ContextFlags = CONTEXT_CAPTURE
-                            if Wow64GetThreadContext(th, ctypes.byref(ctx_)) and ctx_.Eip == target:
-                                ecx = ctx_.Ecx
-                                if ecx:
-                                    try:
-                                        sub = read_int(pm, ecx + OFFSET_SUB_OBJECT)
-                                        if sub:
-                                            result = {"player_fish": ecx, "sub_object": sub}
-                                            clear_hardware_breakpoint(th, 0)
-                                    except Exception:
-                                        pass
-                        finally:
-                            ctypes.windll.kernel32.ResumeThread(th)
-                    ctypes.windll.kernel32.CloseHandle(th)
-        elif event_code == 3:
-            set_bp_on_thread(tid, target, 0)
-        ctypes.windll.kernel32.ContinueDebugEvent(
-            debug_event.dwProcessId, tid, DBG_CONTINUE
-        )
-        if result is not None:
-            ctypes.windll.kernel32.DebugActiveProcessStop(pm.process_id)
-            break
-    return result
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -1696,11 +417,8 @@ def main():
         ctx.run_cli()
 
         await ctx._start_native_server()
-        watcher = asyncio.create_task(game_watcher(ctx), name="game watcher")
 
         await ctx.exit_event.wait()
-        ctx._stop_event.set()
-        watcher.cancel()
         await ctx.shutdown()
 
     import colorama

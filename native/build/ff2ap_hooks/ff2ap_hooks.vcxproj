@@ -379,6 +379,11 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boundary_gate.cpp" />
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\level_guard.cpp" />
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\player_fish.cpp" />
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\ability_gate.cpp" />
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\deathlink.cpp" />
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boss_hp.cpp" />
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\shuffle.cpp" />
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\fullscreen.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

@@ -2,7 +2,6 @@
 
 #include <windows.h>
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -16,6 +15,13 @@
 // object across the whole session, reused in place on every level (re)load, not
 // reallocated (confirmed live this session: repeated hits at the init function returned
 // the same pointer across many level transitions within one process run).
+//
+// This is also where Client.py's old 100ms external poll loop lives now, consolidated
+// and running ~50x tighter (2ms, in-process, no syscall per check): boundary enforcement
+// (from Phase 1), ordinary stage/level completion reporting, boss-defeat -> GOAL, and
+// lost-life -> DEATH_LINK_SEND. Bonus-level filtering and shuffle slot->content mapping
+// stay in Python, same as they already do for the boundary-triggered LEVEL_COMPLETE —
+// this loop only ever reports raw slot-level/stage numbers.
 namespace hooks {
 namespace {
 
@@ -23,12 +29,23 @@ constexpr uintptr_t kLevelInitOffset = 0x9C050;
 
 constexpr int OFFSET_LIVES          = 0x10;
 constexpr int OFFSET_SCORE          = 0x14;
+constexpr int OFFSET_STAGE          = 0x24;
 constexpr int OFFSET_LEVEL_ID       = 0x28;
 constexpr int OFFSET_SCORE_SNAPSHOT = 0x30;
 constexpr int OFFSET_LIVES_SNAPSHOT = 0x34;
 constexpr int OFFSET_PROGRESS       = 0x40;
 
 constexpr auto kPollInterval = std::chrono::milliseconds(2);
+
+// Debounce for stage/level-completion reporting only — boundary enforcement below reacts
+// to the raw read every tick, on purpose, since that's the whole point of it. This exists
+// so a level_id briefly seen mid-reset (the init hook above zeroes it before the real
+// target gets written) can't get mistaken for a real transition and desync last_reported_*
+// from what actually happened. 2 consecutive 2ms ticks (~4ms) is already tighter than the
+// reset window is ever likely to be; it's cheap insurance, not load-bearing precision.
+constexpr int kStableTicks = 2;
+
+constexpr int kBossHpGoal = 20;
 
 void* g_original = nullptr;
 // Plain-identifier alias so the inline __asm block below can reference it directly —
@@ -54,43 +71,102 @@ __declspec(naked) void Detour_LevelInit() {
 }
 
 void PollLoop() {
-    // TODO(Phase 2 step 2 verification): remove once player_fish/sub_object are wired
-    // into something with its own live confirmation (DeathLink) — this only exists to
-    // prove the capture hook fires without flooding the log on every call.
-    intptr_t last_logged_fish = 0;
+    int stable_level_id     = -1;
+    int stable_count        = 0;
+    int last_reported_level = -1;
+    int last_reported_stage = -1;
+    int last_lives          = -1;
+    bool goal_sent          = false;
 
     for (;;) {
         std::this_thread::sleep_for(kPollInterval);
-
-        const intptr_t fish = state::g_player_fish;
-        if (fish != last_logged_fish) {
-            last_logged_fish = fish;
-            char buf[128];
-            wsprintfA(buf, "player_fish captured: 0x%08X sub_object: 0x%08X",
-                      static_cast<unsigned int>(fish), static_cast<unsigned int>(state::g_sub_object));
-            ipc::Log(buf);
-        }
 
         const uintptr_t obj = static_cast<uintptr_t>(g_level_obj);
         if (!obj) {
             continue;
         }
-        const int allowed  = ipc::g_allowed_max.load(std::memory_order_relaxed);
-        const int level_id = Read(obj + OFFSET_LEVEL_ID);
-        if (level_id <= allowed) {
-            continue;
+
+        const int raw_level_id  = Read(obj + OFFSET_LEVEL_ID);
+        const int current_stage = Read(obj + OFFSET_STAGE);
+        const int current_lives = Read(obj + OFFSET_LIVES);
+
+        // ── boundary enforcement (Phase 1 — fast path, no debounce) ────────
+        const int allowed = ipc::g_allowed_max.load(std::memory_order_relaxed);
+        if (raw_level_id > allowed) {
+            const int gateway        = raw_level_id - 1;
+            const int score_snapshot = Read(obj + OFFSET_SCORE_SNAPSHOT);
+            const int lives_snapshot = Read(obj + OFFSET_LIVES_SNAPSHOT);
+            Write(obj + OFFSET_LEVEL_ID, gateway);
+            Write(obj + OFFSET_SCORE,    score_snapshot);
+            Write(obj + OFFSET_LIVES,    lives_snapshot);
+            Write(obj + OFFSET_PROGRESS, 0);
+            ipc::QueueSend("LEVEL_COMPLETE " + std::to_string(gateway));
+            continue;  // state was just rewritten under us — resample next tick
         }
 
-        const int gateway        = level_id - 1;
-        const int score_snapshot = Read(obj + OFFSET_SCORE_SNAPSHOT);
-        const int lives_snapshot = Read(obj + OFFSET_LIVES_SNAPSHOT);
-        Write(obj + OFFSET_LEVEL_ID, gateway);
-        Write(obj + OFFSET_SCORE,    score_snapshot);
-        Write(obj + OFFSET_LIVES,    lives_snapshot);
-        Write(obj + OFFSET_PROGRESS, 0);
+        // ── debounced stage/level completion reporting ─────────────────────
+        if (raw_level_id == stable_level_id) {
+            if (stable_count < kStableTicks) {
+                ++stable_count;
+            }
+        } else {
+            stable_level_id = raw_level_id;
+            stable_count    = 1;
+        }
 
-        ipc::QueueSend("LEVEL_COMPLETE " + std::to_string(gateway));
+        if (stable_count >= kStableTicks) {
+            const int level_id = stable_level_id;
+
+            if (last_reported_stage != -1 && current_stage != last_reported_stage &&
+                (current_stage == 1 || current_stage == 2)) {
+                ipc::QueueSend("STAGE_COMPLETE " + std::to_string(level_id) + " " +
+                               std::to_string(current_stage));
+            }
+
+            if (last_reported_level != -1 && level_id == last_reported_level + 1) {
+                ipc::QueueSend("LEVEL_COMPLETE " + std::to_string(last_reported_level));
+            }
+
+            last_reported_level = level_id;
+            last_reported_stage = current_stage;
+        }
+
+        // ── boss defeat -> goal ─────────────────────────────────────────────
+        const auto boss_addr = static_cast<uintptr_t>(state::g_boss_hp_addr);
+        if (boss_addr && !goal_sent && raw_level_id == 59 && Read(boss_addr) >= kBossHpGoal) {
+            ipc::QueueSend("GOAL");
+            goal_sent = true;
+        }
+
+        // ── DeathLink send ───────────────────────────────────────────────
+        if (last_lives != -1 && current_lives == last_lives - 1) {
+            if (current_lives == state::g_deathlink_suppress_lives) {
+                // This life loss is the one hooks/deathlink.cpp just caused via an
+                // incoming DeathLink — don't bounce it back out.
+                state::g_deathlink_suppress_lives = state::kNoDeathLinkSuppress;
+            } else {
+                ipc::QueueSend("DEATH_LINK_SEND " + std::to_string(current_lives));
+            }
+        }
+        last_lives = current_lives;
     }
+}
+
+// "APPLY_1UP" — the only remaining on-demand game-state write that isn't the boundary
+// gate or DeathLink. Lives here (rather than a dedicated file) since it just reuses the
+// Read/Write helpers and g_level_obj already in scope.
+void HandleLine(const std::string& line) {
+    if (line != "APPLY_1UP") {
+        return;
+    }
+    const uintptr_t obj = static_cast<uintptr_t>(g_level_obj);
+    if (!obj) {
+        ipc::Log("1-Up -- no level object yet, dropping");
+        return;
+    }
+    const int lives = Read(obj + OFFSET_LIVES) + 1;
+    Write(obj + OFFSET_LIVES, lives);
+    ipc::Log("1-Up applied -- lives: " + std::to_string(lives));
 }
 
 }  // namespace
@@ -105,6 +181,7 @@ bool InstallLevelGuard() {
     if (MH_EnableHook(target) != MH_OK) {
         return false;
     }
+    ipc::RegisterHandler(HandleLine);
     std::thread(PollLoop).detach();
     return true;
 }

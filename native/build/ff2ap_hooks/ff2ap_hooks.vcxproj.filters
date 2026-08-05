@@ -19,6 +19,21 @@
     <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\player_fish.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\ability_gate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\deathlink.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\boss_hp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\shuffle.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\hooks\fullscreen.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="F:\Feeding Frenzy 2 Archipelago\native\ff2ap_hooks\CMakeLists.txt" />
