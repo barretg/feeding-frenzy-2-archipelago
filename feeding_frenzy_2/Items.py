@@ -25,11 +25,11 @@ ITEM_TABLE: Dict[str, FF2ItemData] = {
     ),
     "Dash": FF2ItemData(
         code=BASE_ID + 3,
-        classification=ItemClassification.useful,
+        classification=ItemClassification.progression,
     ),
     "Suck": FF2ItemData(
         code=BASE_ID + 4,
-        classification=ItemClassification.useful,
+        classification=ItemClassification.progression,
     ),
 }
 

@@ -19,6 +19,9 @@ SUCK_COUNT             = 1
 TOTAL_LOCATIONS        = len(LOCATION_TABLE)
 TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT - SUCK_COUNT
 
+# 0-indexed content level that can't be cleared without Dash (level 58)
+DASH_REQUIRED_LEVEL_ID = 57
+
 
 # ── Launcher registration ─────────────────────────────────────────────────────
 
@@ -132,19 +135,28 @@ class FF2World(World):
                     state.has("Progressive Fish", self.player, n)
             )
 
-        # Final zone -> Goal (requires all 10 fish)
-        zone_regions[-1].connect(
-            goal_region,
-            rule=lambda state:
-                state.has("Progressive Fish", self.player, PROGRESSIVE_FISH_COUNT)
-        )
-
         # Place locations into zone regions.
         # With level shuffle the accessibility of each location depends on which
         # map slot holds that content, so we map content -> slot to find its zone.
         content_to_slot: List[int] = [0] * 60
         for slot, content in enumerate(self.level_shuffle):
             content_to_slot[content] = slot
+
+        # The map is strictly linear -- the game only unlocks slot N once slot N-1 is
+        # cleared (see HandleBoundaryCheck in native/ff2ap_hooks/hooks/boundary_gate.cpp).
+        # Level 58's content can't be cleared without Dash, so Dash gates not just that
+        # level's own checks but everything sitting at a later map slot, wherever the
+        # shuffle happens to have put that content.
+        dash_slot = content_to_slot[DASH_REQUIRED_LEVEL_ID]
+
+        # Final zone -> Goal (requires all 10 fish, plus Dash: the boss sits at slot 59,
+        # which is always past the dash-gated level)
+        zone_regions[-1].connect(
+            goal_region,
+            rule=lambda state:
+                state.has("Progressive Fish", self.player, PROGRESSIVE_FISH_COUNT)
+                and state.has("Dash", self.player)
+        )
 
         for loc_name, loc_data in LOCATION_TABLE.items():
             slot        = content_to_slot[loc_data.level_id]
@@ -154,7 +166,7 @@ class FF2World(World):
                 self.player, loc_name, loc_data.code, zone_region
             )
             zone_region.locations.append(location)
-            if loc_data.level_id == 57:
+            if slot >= dash_slot:
                 location.access_rule = lambda state: state.has("Dash", self.player)
 
         # Victory event
