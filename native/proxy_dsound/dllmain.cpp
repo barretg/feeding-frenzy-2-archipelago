@@ -80,8 +80,11 @@ HMODULE RealDsound() {
     return g_real;
 }
 
+}  // namespace
+
 // Called from the naked thunks below. __cdecl so the thunk can clean up its own
-// one-argument push. Returns the address to jump to.
+// one-argument push. Returns the address to jump to. Kept at file scope so the inline
+// asm can name it.
 extern "C" FARPROC __cdecl ResolveExport(int index) {
     if (index < 0 || index >= kExportCount) {
         return nullptr;
@@ -95,8 +98,6 @@ extern "C" FARPROC __cdecl ResolveExport(int index) {
     return g_resolved[index];
 }
 
-}  // namespace
-
 // A lazy tail-call thunk. push/call/add is stack-symmetric, so by the time we jmp the
 // callee sees exactly the return address and arguments its caller pushed. Every one of
 // these exports is __stdcall, so no arguments live in ecx/edx and clobbering them across
@@ -104,28 +105,36 @@ extern "C" FARPROC __cdecl ResolveExport(int index) {
 //
 // __declspec(naked) is x86-only, which is fine: popcapgame1.exe is a 32-bit process, so
 // this DLL is only ever built for Win32 (see native/CMakeLists.txt).
+//
+// One __asm per instruction rather than a single __asm{} block: inside a macro the line
+// continuations collapse the body onto one logical line, and a braced block then runs all
+// four instructions together into a single unparseable statement.
+//
+// The thunks are named ff2_* rather than after the exports themselves because the SDK
+// headers already declare real prototypes for several of these (DirectSoundCreate in
+// dsound.h, DllCanUnloadNow and DllGetClassObject via objbase.h), which a `void name()`
+// definition would conflict with. dsound.def maps each export name onto its ff2_ thunk,
+// so the DLL still exports exactly the right undecorated names and ordinals.
 #define PROXY_THUNK(name, index)                     \
     extern "C" __declspec(naked) void name() {       \
-        __asm {                                      \
-            push index                               \
-            call ResolveExport                       \
-            add  esp, 4                              \
-            jmp  eax                                 \
-        }                                            \
+        __asm push index                             \
+        __asm call ResolveExport                     \
+        __asm add  esp, 4                            \
+        __asm jmp  eax                               \
     }
 
-PROXY_THUNK(DirectSoundCreate,            kDirectSoundCreate)
-PROXY_THUNK(DirectSoundEnumerateA,        kDirectSoundEnumerateA)
-PROXY_THUNK(DirectSoundEnumerateW,        kDirectSoundEnumerateW)
-PROXY_THUNK(DllCanUnloadNow,              kDllCanUnloadNow)
-PROXY_THUNK(DllGetClassObject,            kDllGetClassObject)
-PROXY_THUNK(DirectSoundCaptureCreate,     kDirectSoundCaptureCreate)
-PROXY_THUNK(DirectSoundCaptureEnumerateA, kDirectSoundCaptureEnumerateA)
-PROXY_THUNK(DirectSoundCaptureEnumerateW, kDirectSoundCaptureEnumerateW)
-PROXY_THUNK(GetDeviceID,                  kGetDeviceID)
-PROXY_THUNK(DirectSoundFullDuplexCreate,  kDirectSoundFullDuplexCreate)
-PROXY_THUNK(DirectSoundCreate8,           kDirectSoundCreate8)
-PROXY_THUNK(DirectSoundCaptureCreate8,    kDirectSoundCaptureCreate8)
+PROXY_THUNK(ff2_DirectSoundCreate,            kDirectSoundCreate)
+PROXY_THUNK(ff2_DirectSoundEnumerateA,        kDirectSoundEnumerateA)
+PROXY_THUNK(ff2_DirectSoundEnumerateW,        kDirectSoundEnumerateW)
+PROXY_THUNK(ff2_DllCanUnloadNow,              kDllCanUnloadNow)
+PROXY_THUNK(ff2_DllGetClassObject,            kDllGetClassObject)
+PROXY_THUNK(ff2_DirectSoundCaptureCreate,     kDirectSoundCaptureCreate)
+PROXY_THUNK(ff2_DirectSoundCaptureEnumerateA, kDirectSoundCaptureEnumerateA)
+PROXY_THUNK(ff2_DirectSoundCaptureEnumerateW, kDirectSoundCaptureEnumerateW)
+PROXY_THUNK(ff2_GetDeviceID,                  kGetDeviceID)
+PROXY_THUNK(ff2_DirectSoundFullDuplexCreate,  kDirectSoundFullDuplexCreate)
+PROXY_THUNK(ff2_DirectSoundCreate8,           kDirectSoundCreate8)
+PROXY_THUNK(ff2_DirectSoundCaptureCreate8,    kDirectSoundCaptureCreate8)
 
 #undef PROXY_THUNK
 

@@ -32,7 +32,7 @@ __declspec(naked) void Detour_PlayerFishEntry() {
     __asm {
         push eax
         mov dword ptr [g_player_fish], ecx
-        mov eax, dword ptr [ecx + 08Ch]   // kSubObjectOffset — must be a literal, see above
+        mov eax, dword ptr [ecx + 08Ch]   // kSubObjectOffset - must be a literal, see above
         mov dword ptr [g_sub_object], eax
         pop eax
         jmp dword ptr [g_original]

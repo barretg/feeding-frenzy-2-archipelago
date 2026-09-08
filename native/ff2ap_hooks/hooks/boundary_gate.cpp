@@ -66,7 +66,7 @@ __declspec(naked) void Detour_UpdateMaxStage() {
         cmp eax, 0
         jne pass_through
 
-        push edx                   ; save caller's edx — see comment above
+        push edx                   ; save callers edx - see comment above
         push ecx                   ; save profileObj
         push eax                   ; save modeIndex (== 0)
         mov  eax, [esp + 16]       ; eax = newVal (stack: [0]=eax_saved,[4]=ecx_saved,[8]=edx_saved,[12]=retAddr,[16]=newVal)
@@ -76,7 +76,7 @@ __declspec(naked) void Detour_UpdateMaxStage() {
         mov  [esp + 16], eax       ; write back the (possibly clamped) newVal
         pop  eax                   ; restore modeIndex
         pop  ecx                   ; restore profileObj
-        pop  edx                   ; restore caller's edx
+        pop  edx                   ; restore callers edx
 
     pass_through:
         jmp  dword ptr [g_original]
@@ -123,14 +123,14 @@ extern "C" int __cdecl ClampLevelSelect(int requested) {
 // and restored around the call too.
 __declspec(naked) void Detour_LevelSelectWrite() {
     __asm {
-        push edx                            ; save caller's edx
+        push edx                            ; save callers edx
         push ecx                            ; save level_obj ptr, needed by the original store
         push eax                            ; cdecl arg: requested level id
         call ClampLevelSelect
         add  esp, 4                         ; cdecl caller cleans the one pushed arg
-                                             ; eax now holds the clamped return value — left as-is
+                                             ; eax now holds the clamped return value - left as-is
         pop  ecx                            ; restore level_obj ptr
-        pop  edx                            ; restore caller's edx
+        pop  edx                            ; restore callers edx
         jmp  dword ptr [g_levelselect_original]
     }
 }

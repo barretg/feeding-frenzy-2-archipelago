@@ -1,24 +1,25 @@
 ; Export table for proxy_dsound.dll, mirroring the real system dsound.dll.
 ;
 ; Needed for two reasons:
-;   1. The thunks in dllmain.cpp are __stdcall-shaped; without a .def the linker would
-;      export them decorated (_DirectSoundCreate@12 and friends) and popcapgame1.exe's
-;      import table would not resolve.
+;   1. The thunks in dllmain.cpp carry private ff2_ names, because several of these
+;      exports already have real prototypes in the Windows SDK headers that a plain
+;      definition would conflict with. The "export = internal" form renames them back to
+;      the names popcapgame1.exe actually imports, undecorated.
 ;   2. Ordinals must match the genuine dsound.dll so anything importing by ordinal
 ;      rather than by name still lands on the right function.
 ;
 ; Ordinals captured via `dumpbin /EXPORTS` against the real system dsound.dll.
 LIBRARY dsound
 EXPORTS
-    DirectSoundCreate            @1
-    DirectSoundEnumerateA        @2
-    DirectSoundEnumerateW        @3
-    DllCanUnloadNow              @4
-    DllGetClassObject            @5
-    DirectSoundCaptureCreate     @6
-    DirectSoundCaptureEnumerateA @7
-    DirectSoundCaptureEnumerateW @8
-    GetDeviceID                  @9
-    DirectSoundFullDuplexCreate  @10
-    DirectSoundCreate8           @11
-    DirectSoundCaptureCreate8    @12
+    DirectSoundCreate            = ff2_DirectSoundCreate            @1
+    DirectSoundEnumerateA        = ff2_DirectSoundEnumerateA        @2
+    DirectSoundEnumerateW        = ff2_DirectSoundEnumerateW        @3
+    DllCanUnloadNow              = ff2_DllCanUnloadNow              @4
+    DllGetClassObject            = ff2_DllGetClassObject            @5
+    DirectSoundCaptureCreate     = ff2_DirectSoundCaptureCreate     @6
+    DirectSoundCaptureEnumerateA = ff2_DirectSoundCaptureEnumerateA @7
+    DirectSoundCaptureEnumerateW = ff2_DirectSoundCaptureEnumerateW @8
+    GetDeviceID                  = ff2_GetDeviceID                  @9
+    DirectSoundFullDuplexCreate  = ff2_DirectSoundFullDuplexCreate  @10
+    DirectSoundCreate8           = ff2_DirectSoundCreate8           @11
+    DirectSoundCaptureCreate8    = ff2_DirectSoundCaptureCreate8    @12

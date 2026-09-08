@@ -1,0 +1,9 @@
+#!/bin/sh
+# Librarian shim for the clang-cl cross toolchain.
+#
+# lld-link acts as a librarian only when /lib is its first argument, but CMake's MSVC
+# static-library rule emits `<CMAKE_AR> /nologo <flags> /out:...`, so /lib can never be
+# placed first through CMAKE_STATIC_LINKER_FLAGS. This wrapper puts it there.
+#
+# Only used when llvm-lib is absent; install the `llvm` package and it is bypassed.
+exec lld-link /lib "$@"

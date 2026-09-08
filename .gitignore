@@ -1,3 +1,6 @@
 decompile
 *__pycache__
 .claude
+.xwin-cache
+build
+native/build-linux
