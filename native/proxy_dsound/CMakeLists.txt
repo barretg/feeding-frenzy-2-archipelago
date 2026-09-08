@@ -1,5 +1,6 @@
 add_library(proxy_dsound SHARED
   dllmain.cpp
+  dsound.def
 )
 
 set_target_properties(proxy_dsound PROPERTIES

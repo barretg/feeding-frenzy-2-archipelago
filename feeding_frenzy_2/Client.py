@@ -6,8 +6,10 @@ from __future__ import annotations
 import asyncio
 import importlib.resources
 import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -38,10 +40,34 @@ NATIVE_IPC_HOST  = "127.0.0.1"
 NATIVE_IPC_PORT  = 39270
 NATIVE_DLL_NAMES = ("dsound.dll", "ff2ap_hooks.dll")
 GAME_EXE_NAMES   = ("FeedingFrenzy2.exe", "FeedingFrenzyTwo.exe")  # CD vs Steam release; both spawn popcapgame1.exe itself
+STEAM_EXE_NAME   = "FeedingFrenzyTwo.exe"
 STEAM_APPID      = "3390"  # "Feeding Frenzy 2: Shipwreck Showdown Deluxe" — Steam release must be launched
                             # through Steam itself (steam://run), not the exe directly: the depot doesn't ship
                             # steam.dll on disk, Steam's own launcher injects it, and running the exe standalone
                             # fails with "Unable to launch steam.dll".
+
+# Older installs copied the system dsound.dll here for the proxy to forward to. The proxy
+# now resolves the real dsound.dll itself at first call, by absolute system path, so this
+# file is dead weight; see native/proxy_dsound/dllmain.cpp. Cleaned up on install.
+LEGACY_DLL_NAMES = ("dsound_real.dll",)
+
+# ── Linux / Proton ────────────────────────────────────────────────────────────
+# On Linux the client runs natively while the game runs inside a Wine prefix. Only two
+# things actually differ: how the game is started, and the fact that Wine will load its
+# own builtin dsound.dll instead of our proxy unless it's told not to. The IPC link is
+# unaffected: Proton's pressure-vessel container shares the host network namespace, so
+# the hook DLL's connect() to 127.0.0.1 reaches the listener in this process.
+WINE_DSOUND_OVERRIDE = "native,builtin"
+WINEDLLOVERRIDES_ENV = "dsound=n,b"
+
+# Where Steam might live. The library actually holding the game is derived from the game
+# directory itself (see _steam_prefix_dir); these are only the fallback probe list.
+STEAM_ROOT_CANDIDATES = (
+    "~/.steam/steam",
+    "~/.steam/root",
+    "~/.local/share/Steam",
+    "~/.var/app/com.valvesoftware.Steam/data/Steam",  # Flatpak Steam
+)
 
 
 # ── Game logic helpers ────────────────────────────────────────────────────────
@@ -70,27 +96,47 @@ def _read_native_asset(name: str) -> Optional[bytes]:
 
 
 def _ensure_native_hooks_installed(game_dir: Path) -> None:
-    """Write the bundled proxy/payload DLLs (and a local copy of the real system
-    dsound.dll for the proxy to forward to) into the game's install directory,
-    if missing or different from what's bundled in this apworld."""
+    """Write the bundled proxy/payload DLLs into the game's install directory, if
+    missing or different from what's bundled in this apworld."""
+    proxy_data: Optional[bytes] = None
     for name in NATIVE_DLL_NAMES:
         data = _read_native_asset(name)
         if data is None:
             logger.warning(f"[FF2] Native hook file missing from package: native/{name}")
             continue
+        if name == "dsound.dll":
+            proxy_data = data
         dst = game_dir / name
         if not dst.exists() or dst.read_bytes() != data:
             dst.write_bytes(data)
             logger.info(f"[FF2] Installed {name} -> {dst}")
 
-    real_dst = game_dir / "dsound_real.dll"
-    if not real_dst.exists():
-        sys32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "SysWOW64" / "dsound.dll"
-        if sys32.exists():
-            shutil.copy2(sys32, real_dst)
-            logger.info(f"[FF2] Installed dsound_real.dll -> {real_dst}")
-        else:
-            logger.warning("[FF2] Could not find system dsound.dll to copy as dsound_real.dll")
+    if proxy_data is None:
+        return
+
+    # A pre-rebuild proxy still carries PE forwarders naming dsound_real, so the string is
+    # present in its export directory; the current one resolves the system dsound.dll at
+    # runtime and never mentions it. Checking the bytes rather than assuming keeps an
+    # apworld packaged with a stale DLL from having its forward target deleted out from
+    # under it, which would stop the game booting at all.
+    if b"dsound_real" in proxy_data:
+        if not Utils.is_windows:
+            logger.warning("[FF2] The bundled dsound.dll is an old build that forwards to "
+                            "dsound_real.dll, which cannot be produced on Linux. Rebuild the "
+                            "native proxy (native/proxy_dsound) and repackage the apworld.")
+        return
+
+    # Left behind by installs from before the proxy resolved the system dsound.dll on its
+    # own. Harmless but no longer loaded by anything, so don't leave it sitting in the
+    # user's game folder.
+    for name in LEGACY_DLL_NAMES:
+        stale = game_dir / name
+        if stale.exists():
+            try:
+                stale.unlink()
+                logger.info(f"[FF2] Removed obsolete {name}")
+            except OSError:
+                pass
 
 
 def _find_game_exe(p: Path) -> Optional[Path]:
@@ -98,7 +144,22 @@ def _find_game_exe(p: Path) -> Optional[Path]:
         exe = p / name
         if exe.exists():
             return exe
+    # Linux filesystems are case-sensitive, so an install whose casing doesn't match the
+    # names above (a CD rip, a manually copied install) would look empty to the checks
+    # above even though the exe is right there. Scan the directory as a fallback.
+    if not Utils.is_windows:
+        wanted = {name.lower(): name for name in GAME_EXE_NAMES}
+        try:
+            for entry in p.iterdir():
+                if entry.name.lower() in wanted and entry.is_file():
+                    return entry
+        except OSError:
+            pass
     return None
+
+
+def _is_steam_release(exe: Path) -> bool:
+    return exe.name.lower() == STEAM_EXE_NAME.lower()
 
 
 def _valid_game_directory(path) -> Optional[Path]:
@@ -132,6 +193,201 @@ def _pick_game_directory() -> Optional[Path]:
     return _valid_game_directory(chosen)
 
 
+# ── Proton prefix discovery (Linux) ───────────────────────────────────────────
+
+def _steam_library_roots(game_dir: Optional[Path]) -> List[Path]:
+    """Steam library roots to search, best guess first.
+
+    The compatdata prefix for an app lives in the same library as the app itself, which
+    on a Steam Deck is frequently an SD card under /run/media rather than the internal
+    drive. So the game directory we already know is the most reliable source: a Steam
+    install is always <library>/steamapps/common/<game>."""
+    roots: List[Path] = []
+
+    def add(path: Path) -> None:
+        if path not in roots:
+            roots.append(path)
+
+    if game_dir is not None:
+        parents = game_dir.resolve().parents
+        if (len(parents) >= 3
+                and parents[0].name.lower() == "common"
+                and parents[1].name.lower() == "steamapps"):
+            add(parents[2])
+
+    for candidate in STEAM_ROOT_CANDIDATES:
+        root = Path(candidate).expanduser()
+        if root.is_dir():
+            add(root.resolve())
+            # Additional libraries (other drives, SD cards) are listed here. The file is
+            # Valve's VDF format; the only thing we need out of it is the "path" values,
+            # which are plain quoted strings, so a regex beats taking on a VDF parser.
+            vdf = root / "steamapps" / "libraryfolders.vdf"
+            try:
+                text = vdf.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for match in re.finditer(r'"path"\s*"([^"]+)"', text):
+                extra = Path(match.group(1))
+                if extra.is_dir():
+                    add(extra.resolve())
+
+    return roots
+
+
+def _steam_prefix_dir(game_dir: Optional[Path]) -> Optional[Path]:
+    """The Proton prefix Steam uses for the game, or None if it doesn't exist yet.
+
+    It won't exist until the game has been launched through Steam at least once, since
+    Proton is what creates it."""
+    for root in _steam_library_roots(game_dir):
+        pfx = root / "steamapps" / "compatdata" / STEAM_APPID / "pfx"
+        if (pfx / "user.reg").is_file():
+            return pfx
+    return None
+
+
+def _ensure_wine_dll_override(prefix_dir: Path) -> bool:
+    """Register dsound as a native-first override in the Proton prefix.
+
+    Wine resolves dsound to its own builtin in syswow64 unless told otherwise, which
+    means our proxy sitting in the game directory would never be loaded and no hooks
+    would install. On Windows the application directory wins by default and none of this
+    is necessary.
+
+    Steam launch options can't be set programmatically, so the override goes into the
+    prefix's HKCU hive directly. Wine rewrites user.reg when the prefix's processes exit,
+    so this has to happen while the game isn't running, so it is called immediately before
+    launching. It's also re-checked every launch, because a Proton version change can
+    regenerate the prefix and drop the setting.
+
+    Returns True if the override is in place afterwards."""
+    reg = prefix_dir / "user.reg"
+    section    = "[Software\\\\Wine\\\\DllOverrides]"
+    value_line = f'"dsound"="{WINE_DSOUND_OVERRIDE}"'
+
+    try:
+        text = reg.read_text(encoding="utf-8", errors="ignore")
+    except OSError as e:
+        logger.warning(f"[FF2] Could not read {reg}: {e}")
+        return False
+
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().startswith(section)), None)
+
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{section} {int(time.time())}")
+        lines.append(value_line)
+        lines.append("")
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+        existing = next((i for i in range(start + 1, end)
+                         if lines[i].strip().startswith('"dsound"')), None)
+        if existing is not None:
+            if lines[existing].strip() == value_line:
+                return True  # already correct, leave the file alone
+            lines[existing] = value_line
+        else:
+            # Wine emits a "#time=" directive immediately under the key header; values
+            # belong after it, not between it and the header.
+            insert_at = start + 1
+            while insert_at < end and lines[insert_at].startswith("#"):
+                insert_at += 1
+            lines.insert(insert_at, value_line)
+
+    try:
+        tmp = reg.with_suffix(".reg.ff2tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, reg)
+    except OSError as e:
+        logger.warning(f"[FF2] Could not write the dsound override into {reg}: {e}")
+        return False
+
+    logger.info(f"[FF2] Set dsound override in the Proton prefix ({prefix_dir})")
+    return True
+
+
+def _wine_env() -> dict:
+    """Environment for launching the game ourselves through Wine/Proton.
+
+    LD_LIBRARY_PATH has to go: the Archipelago AppImage and tarball both set it, and it
+    breaks anything native we spawn."""
+    env = dict(Utils.env_cleared_lib_path())
+    existing = env.get("WINEDLLOVERRIDES", "")
+    env["WINEDLLOVERRIDES"] = f"{existing};{WINEDLLOVERRIDES_ENV}" if existing else WINEDLLOVERRIDES_ENV
+    return env
+
+
+def _open_url_linux(url: str) -> bool:
+    # xdg-open rather than `steam -applaunch`, because it goes through the desktop's URL
+    # handler and so works with Flatpak Steam too, where calling the steam binary directly
+    # does not.
+    opener = shutil.which("xdg-open")
+    if opener:
+        subprocess.Popen([opener, url], env=Utils.env_cleared_lib_path())
+        return True
+    gio = shutil.which("gio")
+    if gio:
+        subprocess.Popen([gio, "open", url], env=Utils.env_cleared_lib_path())
+        return True
+    logger.warning(f"[FF2] Neither xdg-open nor gio is available; open {url} yourself.")
+    return False
+
+
+# ── Launch ────────────────────────────────────────────────────────────────────
+
+def _launch_steam_release(game_dir: Path) -> bool:
+    """Start the Steam release through Steam itself, which is required either way: the
+    depot doesn't ship steam.dll on disk, Steam's launcher provides it, and running the
+    exe standalone fails with "Unable to launch steam.dll"."""
+    url = f"steam://run/{STEAM_APPID}"
+
+    if not Utils.is_windows:
+        prefix = _steam_prefix_dir(game_dir)
+        if prefix is None:
+            logger.warning("[FF2] No Proton prefix for Feeding Frenzy 2 yet, so the dsound "
+                            "override can't be set and this launch will be unmodded. Let the "
+                            "game start once, close it, then press Launch Game again.")
+        elif not _ensure_wine_dll_override(prefix):
+            logger.warning("[FF2] Could not set the dsound override automatically. Set this as "
+                            "the game's Steam launch options instead: "
+                            f'WINEDLLOVERRIDES="{WINEDLLOVERRIDES_ENV}" %command%')
+        return _open_url_linux(url)
+
+    os.startfile(url)
+    return True
+
+
+def _launch_cd_release(game_dir: Path, exe: Path) -> bool:
+    if Utils.is_windows:
+        subprocess.Popen([str(exe)], cwd=str(game_dir))
+        return True
+
+    # Running it ourselves means we control the environment, so the dsound override is
+    # just a variable here and none of the registry work above is needed.
+    env = _wine_env()
+
+    umu = shutil.which("umu-run")
+    if umu:
+        # umu is the supported way to use Proton (and protonfixes) outside of Steam.
+        env.setdefault("GAMEID", "0")
+        subprocess.Popen([umu, str(exe)], cwd=str(game_dir), env=env)
+        return True
+
+    wine = shutil.which("wine")
+    if wine:
+        subprocess.Popen([wine, str(exe)], cwd=str(game_dir), env=env)
+        return True
+
+    logger.warning("[FF2] Neither umu-run nor wine was found, so the disc release can't be "
+                    "started from here. Install umu-launcher, or add "
+                    f"{exe} to Steam as a non-Steam game with Proton enabled and these launch "
+                    f'options: WINEDLLOVERRIDES="{WINEDLLOVERRIDES_ENV}" %command%')
+    return False
+
+
 def launch_game() -> None:
     game_dir = _get_game_directory()
     if game_dir is None:
@@ -144,13 +400,10 @@ def launch_game() -> None:
     _ensure_native_hooks_installed(game_dir)
 
     exe = _find_game_exe(game_dir)
-    if exe.name == "FeedingFrenzyTwo.exe":
-        # Steam release: must go through Steam's own launcher so it can provide steam.dll;
-        # running the exe directly fails with "Unable to launch steam.dll".
-        os.startfile(f"steam://run/{STEAM_APPID}")
-    else:
-        subprocess.Popen([str(exe)], cwd=str(game_dir))
-    logger.info(f"[FF2] Launched {exe}")
+    launched = (_launch_steam_release(game_dir) if _is_steam_release(exe)
+                else _launch_cd_release(game_dir, exe))
+    if launched:
+        logger.info(f"[FF2] Launched {exe}")
 
 
 # ── Command processor ─────────────────────────────────────────────────────────
@@ -159,6 +412,14 @@ class FF2CommandProcessor(ClientCommandProcessor):
     def _cmd_fullscreen(self):
         """Toggle borderless windowed fullscreen with scaled mouse input."""
         ctx: FF2Context = self.ctx
+        if not Utils.is_windows:
+            # The hook resizes the window and redirects SetCursorPos/ClipCursor, none of
+            # which behaves predictably under gamescope. In Steam Deck Game Mode gamescope
+            # is already scaling the game's native 800x600 canvas to the screen, so this
+            # is redundant there as well as unreliable. Desktop Mode is fine.
+            logger.info("[FF2] Note: don't use /fullscreen in Steam Deck Game Mode -- gamescope "
+                        "already scales the game, and the window/cursor changes this makes "
+                        "misbehave there. It works normally in Desktop Mode.")
         ctx._send_native("TOGGLE_FULLSCREEN")
 
     def _cmd_directory(self, path: str = "") -> None:
@@ -184,7 +445,7 @@ class FF2CommandProcessor(ClientCommandProcessor):
             logger.warning("[FF2] No valid Feeding Frenzy 2 install directory configured; nothing to uninstall.")
             return
         removed, failed = [], []
-        for name in (*NATIVE_DLL_NAMES, "dsound_real.dll"):
+        for name in (*NATIVE_DLL_NAMES, *LEGACY_DLL_NAMES):
             f = game_dir / name
             if not f.exists():
                 continue
@@ -208,6 +469,9 @@ class FF2CommandProcessor(ClientCommandProcessor):
         logger.info(f"Last known stage: {ctx.last_known_stage}")
         logger.info(f"Fish received: {ctx.fish_received}")
         logger.info(f"Max allowed stage: {max_allowed_stage(ctx.fish_received)}")
+        if not Utils.is_windows:
+            prefix = _steam_prefix_dir(_get_game_directory())
+            logger.info(f"Proton prefix: {prefix if prefix else 'not created yet'}")
 
 
 # ── Context ───────────────────────────────────────────────────────────────────

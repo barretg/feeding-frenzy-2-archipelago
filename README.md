@@ -20,7 +20,7 @@ Install as you would any other apworld (put it in `custom_worlds`, or double cli
 1. Launch the **Feeding Frenzy 2 Client** from the Archipelago Launcher. Do **not** start the game yourself -- the client has to start it (see below).
 2. Click **Launch Game** in the client.
    * The first time, you'll be asked to pick your Feeding Frenzy 2 install directory (the folder containing `FeedingFrenzy2.exe` for the original release, or `FeedingFrenzyTwo.exe` for the Steam "Deluxe" release). It's remembered after that.
-   * The client copies its mod DLLs (`dsound.dll`, `ff2ap_hooks.dll`, plus a copy of the system `dsound.dll` as `dsound_real.dll`) into that folder and then starts the game. The Steam release is started through Steam so it can provide `steam.dll`.
+   * The client copies its mod DLLs (`dsound.dll` and `ff2ap_hooks.dll`) into that folder and then starts the game. The Steam release is started through Steam so it can provide `steam.dll`.
 3. At the title screen, create a **new user**. **This is very important:** the randomizer writes level-progress data into whichever profile you use, so use a fresh one rather than your normal save.
 4. Connect to the server in the client.
 5. (Optional) Type `/fullscreen` in the client for borderless fullscreen with scaled mouse input.
@@ -33,6 +33,17 @@ The game and the client link up over a local connection as soon as both are runn
 * `/directory "<path>"` — Set the install directory manually instead of using the file picker.
 * `/status` — Show the last known level/stage, fish received, and whether the game is connected.
 * `/uninstall` — Remove the mod DLLs from the install directory so the game launches unmodified again (close the game first).
+
+### Linux, SteamOS and Steam Deck
+Everything above works the same on Linux. The client runs natively; only the game runs under Proton, and the two talk over a local connection that crosses that boundary without any special setup. Nothing is written outside your home directory, so read-only distros like SteamOS and Bazzite are fine.
+
+A few Linux-specific notes:
+
+* **Use Desktop Mode**, at least for setup. Picking the install directory needs a file dialog.
+* **Steam release:** the client sets the `dsound` DLL override inside the game's Proton prefix for you. That prefix only exists after Proton has created it, so if you've never run the game, the first **Launch Game** will start it unmodded. Close it and press **Launch Game** again.
+  * If the client reports that it couldn't set the override, set it yourself in the game's Steam launch options instead: `WINEDLLOVERRIDES="dsound=n,b" %command%`
+* **Disc release:** launched through [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher) if it's installed, otherwise plain `wine`. If you have neither, add the exe to Steam as a non-Steam game with Proton enabled and the launch options above.
+* **Don't use `/fullscreen` in Steam Deck Game Mode.** Gamescope already scales the game, and the window and cursor changes the command makes don't behave properly there. It works normally in Desktop Mode.
 
 ### Launching the game outside Archipelago
 Once the DLLs are installed, the mod loads on **every** launch of the game, including launches from Steam or the desktop shortcut. Without the client running it just sits idle retrying the connection, but if you want the game fully vanilla again, run `/uninstall` in the client.
