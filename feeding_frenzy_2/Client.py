@@ -464,6 +464,8 @@ class FF2CommandProcessor(ClientCommandProcessor):
     def _cmd_status(self):
         """Show current game state (as of the last update received from the game)."""
         ctx: FF2Context = self.ctx
+        logger.info(f"Listening for the game: {ctx._native_server is not None} "
+                    f"(port {NATIVE_IPC_PORT})")
         logger.info(f"Native hooks connected: {bool(ctx._native_writers)}")
         logger.info(f"Last known level (1-indexed): {ctx.last_known_level + 1 if ctx.last_known_level is not None else '?'}")
         logger.info(f"Last known stage: {ctx.last_known_stage}")
@@ -620,7 +622,26 @@ class FF2Context(CommonContext):
                     self._native_writers.remove(writer)
                 logger.info("[FF2] Native hooks disconnected")
 
-        self._native_server = await asyncio.start_server(handle, NATIVE_IPC_HOST, NATIVE_IPC_PORT)
+        # Retry rather than raise. An exception escaping here used to propagate out of the
+        # client's main coroutine and cancel the UI task, leaving a client that still drew
+        # a window, still accepted commands and still launched the game, but had no
+        # listener and so could never hear from it -- visible only as a permanent
+        # "Native hooks connected: False". The usual cause is a second copy of the client
+        # already holding the port, so keep trying and take it over if that copy exits.
+        delay = 2
+        while not self.exit_event.is_set():
+            try:
+                self._native_server = await asyncio.start_server(
+                    handle, NATIVE_IPC_HOST, NATIVE_IPC_PORT)
+                logger.info(f"[FF2] Waiting for the game on {NATIVE_IPC_HOST}:{NATIVE_IPC_PORT}")
+                return
+            except OSError as e:
+                logger.error(
+                    f"[FF2] Could not listen on {NATIVE_IPC_HOST}:{NATIVE_IPC_PORT} ({e}). "
+                    "Another Feeding Frenzy 2 Client is most likely already open -- close it "
+                    f"and this one will take over. Retrying in {delay}s.")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
 
     def _handle_native_line(self, line: str) -> None:
         line = line.strip()
@@ -728,21 +749,31 @@ class FF2Context(CommonContext):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
+def main(*launch_args: str):
+    """Entry point. `launch_args` are the client's own arguments.
+
+    They have to be taken explicitly rather than read out of sys.argv. The Launcher runs
+    components via multiprocessing without rewriting sys.argv, so a bare parse_args() in
+    the child sees the launcher's own command line and dies on the component name:
+    `ArchipelagoLauncher "Feeding Frenzy 2 Client"` would fail with
+    `unrecognized arguments: Feeding Frenzy 2 Client`."""
     Utils.init_logging("FF2Client", exception_logger="Client")
 
     async def _main():
         parser = get_base_parser(description="Feeding Frenzy 2 Archipelago Client")
-        args   = parser.parse_args()
+        args   = parser.parse_args(launch_args)
 
         ctx = FF2Context(args.connect, args.password)
         ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
 
+        # Started before the GUI and as its own task: it retries on failure, so awaiting it
+        # inline would stall startup, and binding first means the listener is up before the
+        # game can possibly connect.
+        ctx.native_task = asyncio.create_task(ctx._start_native_server(), name="FF2 native IPC")
+
         if gui_enabled:
             ctx.run_gui()
         ctx.run_cli()
-
-        await ctx._start_native_server()
 
         await ctx.exit_event.wait()
         await ctx.shutdown()
@@ -753,4 +784,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Running the file directly, so sys.argv really is ours to parse.
+    import sys
+    main(*sys.argv[1:])

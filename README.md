@@ -39,8 +39,10 @@ Everything above works the same on Linux. The client runs natively; only the gam
 
 A few Linux-specific notes:
 
+* **Run Archipelago natively, not under Wine or Proton.** Only the game runs under Proton. The client is ordinary Python that talks to the mod over a local connection, and its launch and prefix-setup logic all assumes a native Linux process.
 * **Use Desktop Mode**, at least for setup. Picking the install directory needs a file dialog.
 * **Steam release:** the client sets the `dsound` DLL override inside the game's Proton prefix for you. That prefix only exists after Proton has created it, so if you've never run the game, the first **Launch Game** will start it unmodded. Close it and press **Launch Game** again.
+* **Check that it took.** Type `/status` in the client. `Native hooks connected: True` means the game found the client and the mod is live. If it says `False` while the game is running, the DLL override didn't apply.
   * If the client reports that it couldn't set the override, set it yourself in the game's Steam launch options instead: `WINEDLLOVERRIDES="dsound=n,b" %command%`
 * **Disc release:** launched through [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher) if it's installed, otherwise plain `wine`. If you have neither, add the exe to Steam as a non-Steam game with Proton enabled and the launch options above.
 * **Don't use `/fullscreen` in Steam Deck Game Mode.** Gamescope already scales the game, and the window and cursor changes the command makes don't behave properly there. It works normally in Desktop Mode.
