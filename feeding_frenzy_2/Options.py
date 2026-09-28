@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from Options import DefaultOnToggle, Toggle, PerGameCommonOptions
+from Options import Toggle, PerGameCommonOptions
 
 
 class DeathLink(Toggle):
@@ -13,14 +13,14 @@ class LevelShuffle(Toggle):
     display_name = "Level Shuffle"
 
 
-class Powerupsanity(DefaultOnToggle):
+class Powerupsanity(Toggle):
     """Power-ups (Speed Boost, Frenzy, Fury, Stun, Shield, Lure, Light, Time, Shrink Shroom,
     Starfish, 1-Up) cannot be picked up until their item is received. Locked power-ups are
     passed through untouched."""
     display_name = "Power-up-sanity"
 
 
-class Frenzsanity(DefaultOnToggle):
+class Frenzsanity(Toggle):
     """Adds 5 Progressive Frenzy items. With none, the Frenzy multiplier never builds; each one
     raises the cap by one tier, up to Mega Frenzy."""
     display_name = "Frenzsanity"
