@@ -10,6 +10,8 @@ add_library(ff2ap_hooks SHARED
   hooks/boss_hp.cpp
   hooks/shuffle.cpp
   hooks/fullscreen.cpp
+  hooks/powerup_gate.cpp
+  hooks/frenzy_gate.cpp
 )
 
 set_target_properties(ff2ap_hooks PROPERTIES PREFIX "")

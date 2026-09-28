@@ -4,7 +4,7 @@ from BaseClasses import Item, ItemClassification, Region, Tutorial
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import Component, components, Type, launch_subprocess
 
-from .Items import FF2Item, ITEM_TABLE, item_name_to_id, item_descriptions
+from .Items import FF2Item, ITEM_TABLE, POWERUP_ITEMS, item_name_to_id, item_descriptions
 from .Locations import (FF2Location, LOCATION_TABLE, ZONE_BOUNDARIES,
                         location_name_to_id, location_descriptions,
                         fish_required_for_zone, zone_for_level_id)
@@ -16,11 +16,15 @@ EXTRA_FISH             = 2
 TOTAL_FISH_ITEMS       = PROGRESSIVE_FISH_COUNT + EXTRA_FISH
 DASH_COUNT             = 1
 SUCK_COUNT             = 1
+FRENZY_COUNT           = 5
 TOTAL_LOCATIONS        = len(LOCATION_TABLE)
-TOTAL_1UP_ITEMS        = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT - SUCK_COUNT
 
 # 0-indexed content level that can't be cleared without Dash (level 58)
 DASH_REQUIRED_LEVEL_ID = 57
+
+# 0-indexed content levels where the Light power-up spawns (Eddie the angler levels).
+# Only in logic with Power-up-sanity on.
+LIGHT_REQUIRED_LEVEL_IDS = (16, 17, 18, 19, 20, 51, 52, 53)
 
 
 # ── Launcher registration ─────────────────────────────────────────────────────
@@ -107,7 +111,15 @@ class FF2World(World):
             self.multiworld.itempool.append(self.create_item("Dash"))
         for _ in range(SUCK_COUNT):
             self.multiworld.itempool.append(self.create_item("Suck"))
-        for _ in range(TOTAL_1UP_ITEMS):
+        extra: List[str] = []
+        if self.options.frenzsanity:
+            extra += ["Progressive Frenzy"] * FRENZY_COUNT
+        if self.options.powerupsanity:
+            extra += list(POWERUP_ITEMS)
+        for name in extra:
+            self.multiworld.itempool.append(self.create_item(name))
+        filler = TOTAL_LOCATIONS - TOTAL_FISH_ITEMS - DASH_COUNT - SUCK_COUNT - len(extra)
+        for _ in range(filler):
             self.multiworld.itempool.append(self.create_item("1-Up"))
 
     def create_regions(self) -> None:
@@ -148,6 +160,10 @@ class FF2World(World):
         # level's own checks but everything sitting at a later map slot, wherever the
         # shuffle happens to have put that content.
         dash_slot = content_to_slot[DASH_REQUIRED_LEVEL_ID]
+        # Same reasoning for Light: the earliest slot holding an angler level gates every
+        # slot from there on.
+        light_slot = (min(content_to_slot[lvl] for lvl in LIGHT_REQUIRED_LEVEL_IDS)
+                      if self.options.powerupsanity else len(content_to_slot))
 
         # Final zone -> Goal (requires all 10 fish, plus Dash: the boss sits at slot 59,
         # which is always past the dash-gated level)
@@ -156,6 +172,7 @@ class FF2World(World):
             rule=lambda state:
                 state.has("Progressive Fish", self.player, PROGRESSIVE_FISH_COUNT)
                 and state.has("Dash", self.player)
+                and (light_slot >= len(content_to_slot) or state.has("Power-up: Light", self.player))
         )
 
         for loc_name, loc_data in LOCATION_TABLE.items():
@@ -166,8 +183,13 @@ class FF2World(World):
                 self.player, loc_name, loc_data.code, zone_region
             )
             zone_region.locations.append(location)
+            required = []
             if slot >= dash_slot:
-                location.access_rule = lambda state: state.has("Dash", self.player)
+                required.append("Dash")
+            if slot >= light_slot:
+                required.append("Power-up: Light")
+            if required:
+                location.access_rule = lambda state, r=tuple(required): state.has_all(r, self.player)
 
         # Victory event
         victory_location = FF2Location(self.player, "Final Boss", None, goal_region)
@@ -184,6 +206,8 @@ class FF2World(World):
         data: Dict = {
             "death_link":      bool(self.options.death_link.value),
             "zone_boundaries": ZONE_BOUNDARIES,
+            "powerupsanity":    bool(self.options.powerupsanity.value),
+            "frenzsanity":      bool(self.options.frenzsanity.value),
         }
         if self.options.level_shuffle:
             data["level_shuffle"] = self.level_shuffle

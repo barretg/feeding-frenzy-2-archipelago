@@ -10,6 +10,8 @@
 #include "hooks/boss_hp.h"
 #include "hooks/shuffle.h"
 #include "hooks/fullscreen.h"
+#include "hooks/powerup_gate.h"
+#include "hooks/frenzy_gate.h"
 
 namespace {
 
@@ -26,6 +28,8 @@ DWORD WINAPI WorkerThread(LPVOID) {
     hooks::InstallBossHp();
     hooks::InstallShuffle();
     hooks::InstallFullscreen();
+    hooks::InstallPowerupGate();
+    hooks::InstallFrenzyGate();
     ipc::Init();  // background connect/receive loop; never returns
     return 0;
 }

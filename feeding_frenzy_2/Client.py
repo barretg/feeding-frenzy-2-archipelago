@@ -30,6 +30,11 @@ ITEM_PROGRESSIVE_FISH = 0xFF20000 + 1
 ITEM_1UP              = 0xFF20000 + 2
 ITEM_DASH              = 0xFF20000 + 3
 ITEM_SUCK              = 0xFF20000 + 4
+ITEM_PROGRESSIVE_FRENZY = 0xFF20000 + 5
+ITEM_POWERUP_BASE      = 0xFF20000 + 0x10  # + bit index, see Items.POWERUP_ITEMS
+POWERUP_COUNT          = 11
+POWERUPS_ALL_UNLOCKED  = (1 << POWERUP_COUNT) - 1
+FRENZY_MAX_LEVEL       = 5
 
 # ── Native hook IPC (ff2ap_hooks.dll, injected via the dsound.dll proxy) ──────
 # Loopback TCP, newline-delimited text — must match native/ff2ap_hooks/ipc.h.
@@ -490,6 +495,13 @@ class FF2Context(CommonContext):
         self.fish_received:   int  = 0
         self.dash_received:   bool = False
         self.suck_received:   bool = False
+        self.frenzy_received: int  = 0
+        self.powerups_mask:   int  = 0
+
+        # slot options; False (vanilla) until Connected, and for seeds generated before
+        # these options existed
+        self.powerupsanity: bool = False
+        self.frenzsanity:   bool = False
 
         # native hook IPC (ff2ap_hooks.dll) — all game-memory access happens there now
         self._native_server:  Optional[asyncio.AbstractServer] = None
@@ -519,6 +531,9 @@ class FF2Context(CommonContext):
             self._death_link_enabled = bool(slot_data.get("death_link", False))
             if self._death_link_enabled:
                 Utils.async_start(self.update_death_link(True))
+            self.powerupsanity = bool(slot_data.get("powerupsanity", False))
+            self.frenzsanity   = bool(slot_data.get("frenzsanity", False))
+            self._push_powerup_state()
             shuffle = slot_data.get("level_shuffle")
             if shuffle:
                 self.level_shuffle = shuffle
@@ -531,6 +546,8 @@ class FF2Context(CommonContext):
                 self.fish_received = 0  # full resend — recount from scratch
                 self.dash_received = False
                 self.suck_received = False
+                self.frenzy_received = 0
+                self.powerups_mask = 0
             for item in args["items"]:
                 item_id = item.item
                 if item_id == ITEM_PROGRESSIVE_FISH:
@@ -546,8 +563,15 @@ class FF2Context(CommonContext):
                 elif item_id == ITEM_SUCK:
                     self.suck_received = True
                     logger.info("[FF2] Received Suck")
+                elif item_id == ITEM_PROGRESSIVE_FRENZY:
+                    self.frenzy_received += 1
+                    logger.info(f"[FF2] Received Progressive Frenzy ({self.frenzy_received} total)")
+                elif ITEM_POWERUP_BASE <= item_id < ITEM_POWERUP_BASE + POWERUP_COUNT:
+                    self.powerups_mask |= 1 << (item_id - ITEM_POWERUP_BASE)
+                    logger.info(f"[FF2] Received {self.item_names.lookup_in_game(item_id)}")
             self._push_allowed_max()
             self._push_ability_state()
+            self._push_powerup_state()
 
         elif cmd == "Bounced":
             if self._death_link_enabled and "DeathLink" in args.get("tags", []):
@@ -602,6 +626,8 @@ class FF2Context(CommonContext):
                 writer.write(f"ALLOWED_MAX {max_allowed_stage(self.fish_received)}\n".encode())
                 writer.write(f"DASH_ENABLED {int(self.dash_received)}\n".encode())
                 writer.write(f"SUCK_ENABLED {int(self.suck_received)}\n".encode())
+                writer.write(f"POWERUPS_UNLOCKED {self._powerups_unlocked()}\n".encode())
+                writer.write(f"FRENZY_LEVEL {self._frenzy_level()}\n".encode())
                 if self.level_shuffle:
                     writer.write((f"SHUFFLE {','.join(str(v) for v in self.level_shuffle[:60])}\n").encode())
                 await writer.drain()
@@ -716,6 +742,16 @@ class FF2Context(CommonContext):
     def _push_ability_state(self) -> None:
         self._send_native(f"DASH_ENABLED {int(self.dash_received)}")
         self._send_native(f"SUCK_ENABLED {int(self.suck_received)}")
+
+    def _powerups_unlocked(self) -> int:
+        return self.powerups_mask if self.powerupsanity else POWERUPS_ALL_UNLOCKED
+
+    def _frenzy_level(self) -> int:
+        return min(self.frenzy_received, FRENZY_MAX_LEVEL) if self.frenzsanity else FRENZY_MAX_LEVEL
+
+    def _push_powerup_state(self) -> None:
+        self._send_native(f"POWERUPS_UNLOCKED {self._powerups_unlocked()}")
+        self._send_native(f"FRENZY_LEVEL {self._frenzy_level()}")
 
     def _push_shuffle(self) -> None:
         if not self.level_shuffle:
