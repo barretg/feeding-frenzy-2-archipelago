@@ -205,6 +205,7 @@ class FF2World(World):
     def fill_slot_data(self) -> Dict:
         data: Dict = {
             "death_link":      bool(self.options.death_link.value),
+            "death_link_amnesty": int(self.options.death_link_amnesty.value),
             "zone_boundaries": ZONE_BOUNDARIES,
             "powerupsanity":    bool(self.options.powerupsanity.value),
             "frenzsanity":      bool(self.options.frenzsanity.value),

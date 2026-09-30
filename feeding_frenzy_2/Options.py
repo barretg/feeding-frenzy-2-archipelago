@@ -1,11 +1,17 @@
 from dataclasses import dataclass
-from Options import Toggle, PerGameCommonOptions
+from Options import Toggle, Range, PerGameCommonOptions
 
 
 class DeathLink(Toggle):
-    """When you lose a life, everyone loses a life. When you receive a death, you lose a life."""
+    """When you lose a life, everyone dies. When you receive a death, you lose a life."""
     display_name = "Death Link"
 
+class DeathLinkAmnesty(Range):
+    """Set number of deaths to ignore before sending out a deathlink."""
+    display_name = "Death Link Amnesty"
+    range_start = 0
+    range_end = 10
+    default = 2
 
 class LevelShuffle(Toggle):
     """Randomize which level content appears at each map slot.
@@ -29,6 +35,7 @@ class Frenzsanity(Toggle):
 @dataclass
 class FF2Options(PerGameCommonOptions):
     death_link:         DeathLink
+    death_link_amnesty: DeathLinkAmnesty
     level_shuffle:      LevelShuffle
     powerupsanity:      Powerupsanity
     frenzsanity:        Frenzsanity

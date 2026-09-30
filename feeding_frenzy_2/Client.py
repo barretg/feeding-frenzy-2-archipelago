@@ -511,6 +511,8 @@ class FF2Context(CommonContext):
         self._completed_levels:   set  = set()
         self._completed_stages:   set  = set()
         self._death_link_enabled: bool = False
+        self._death_link_amnesty: int  = 0
+        self._amnesty_remaining:  Optional[int] = None  # local deaths left to ignore before sending
 
         # last-known state for /status — updated as native messages arrive, not live-polled
         self.last_known_level: Optional[int] = None
@@ -531,6 +533,11 @@ class FF2Context(CommonContext):
             self._death_link_enabled = bool(slot_data.get("death_link", False))
             if self._death_link_enabled:
                 Utils.async_start(self.update_death_link(True))
+            amnesty = int(slot_data.get("death_link_amnesty", 0))
+            # Keep the running count across reconnects to the same slot
+            if self._amnesty_remaining is None or amnesty != self._death_link_amnesty:
+                self._amnesty_remaining = amnesty
+            self._death_link_amnesty = amnesty
             self.powerupsanity = bool(slot_data.get("powerupsanity", False))
             self.frenzsanity   = bool(slot_data.get("frenzsanity", False))
             self._push_powerup_state()
@@ -600,6 +607,12 @@ class FF2Context(CommonContext):
 
     def _send_death_link(self):
         if self._death_link_enabled:
+            # Only local deaths reach here, so only they consume amnesty
+            if self._amnesty_remaining:
+                self._amnesty_remaining -= 1
+                logger.info(f"[FF2] DeathLink amnesty used ({self._amnesty_remaining} remaining)")
+                return
+            self._amnesty_remaining = self._death_link_amnesty
             logger.info("[FF2] DeathLink sent")
             Utils.async_start(self.send_msgs([{
                 "cmd": "Bounce",
