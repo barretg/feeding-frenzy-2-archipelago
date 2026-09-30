@@ -172,12 +172,12 @@ void HandleLine(const std::string& line) {
     }
     const uintptr_t obj = static_cast<uintptr_t>(g_level_obj);
     if (!obj) {
-        ipc::Log("1-Up -- no level object yet, dropping");
+        ipc::Log("1-Up: no level object yet, dropping");
         return;
     }
     const int lives = Read(obj + OFFSET_LIVES) + 1;
     Write(obj + OFFSET_LIVES, lives);
-    ipc::Log("1-Up applied -- lives: " + std::to_string(lives));
+    ipc::Log("1-Up applied, lives: " + std::to_string(lives));
 }
 
 }  // namespace

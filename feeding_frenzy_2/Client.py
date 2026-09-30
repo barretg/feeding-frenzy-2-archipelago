@@ -422,7 +422,7 @@ class FF2CommandProcessor(ClientCommandProcessor):
             # which behaves predictably under gamescope. In Steam Deck Game Mode gamescope
             # is already scaling the game's native 800x600 canvas to the screen, so this
             # is redundant there as well as unreliable. Desktop Mode is fine.
-            logger.info("[FF2] Note: don't use /fullscreen in Steam Deck Game Mode -- gamescope "
+            logger.info("[FF2] Note: don't use /fullscreen in Steam Deck Game Mode. Gamescope "
                         "already scales the game, and the window/cursor changes this makes "
                         "misbehave there. It works normally in Desktop Mode.")
         ctx._send_native("TOGGLE_FULLSCREEN")
@@ -435,7 +435,7 @@ class FF2CommandProcessor(ClientCommandProcessor):
         game_dir = _valid_game_directory(path)
         if game_dir is None:
             logger.warning(f'[FF2] "{path}" does not contain one of {GAME_EXE_NAMES} '
-                            f"-- not a valid Feeding Frenzy 2 install directory.")
+                            f"and is not a valid Feeding Frenzy 2 install directory.")
             return
         from . import FF2Settings
         get_settings()["feeding_frenzy_2_options"]["game_directory"] = FF2Settings.GameDirectory(str(game_dir))
@@ -460,11 +460,11 @@ class FF2CommandProcessor(ClientCommandProcessor):
             except OSError:
                 failed.append(name)
         if failed:
-            logger.warning(f"[FF2] Could not remove {', '.join(failed)} -- close the game first, then retry.")
+            logger.warning(f"[FF2] Could not remove {', '.join(failed)}. Close the game first, then retry.")
         if removed:
             logger.info(f"[FF2] Removed: {', '.join(removed)}. The game will launch unmodified from now on.")
         elif not failed:
-            logger.info("[FF2] Nothing to remove -- native hooks were not installed in this directory.")
+            logger.info("[FF2] Nothing to remove; native hooks were not installed in this directory.")
 
     def _cmd_status(self):
         """Show current game state (as of the last update received from the game)."""
@@ -664,7 +664,7 @@ class FF2Context(CommonContext):
         # Retry rather than raise. An exception escaping here used to propagate out of the
         # client's main coroutine and cancel the UI task, leaving a client that still drew
         # a window, still accepted commands and still launched the game, but had no
-        # listener and so could never hear from it -- visible only as a permanent
+        # listener and so could never hear from it. It was visible only as a permanent
         # "Native hooks connected: False". The usual cause is a second copy of the client
         # already holding the port, so keep trying and take it over if that copy exits.
         delay = 2
@@ -677,7 +677,7 @@ class FF2Context(CommonContext):
             except OSError as e:
                 logger.error(
                     f"[FF2] Could not listen on {NATIVE_IPC_HOST}:{NATIVE_IPC_PORT} ({e}). "
-                    "Another Feeding Frenzy 2 Client is most likely already open -- close it "
+                    "Another Feeding Frenzy 2 Client is most likely already open. Close it "
                     f"and this one will take over. Retrying in {delay}s.")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30)

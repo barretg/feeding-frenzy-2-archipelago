@@ -97,7 +97,7 @@ bool InstallBoundaryGate() {
 
 namespace {
 
-// mov ecx,[ebx+0Ch] ; mov ecx,[ecx+3Ch] ; mov [ecx+28],eax  -- the last of these three is
+// mov ecx,[ebx+0Ch] ; mov ecx,[ecx+3Ch] ; mov [ecx+28],eax. The last of these three is
 // the actual write; the two `mov ecx,...` before it resolve ecx to level_obj. Confirmed
 // live via x64dbg this session: this single site fires for BOTH the map-select confirm
 // path (eax = whatever level the player clicked, unclamped) and the natural

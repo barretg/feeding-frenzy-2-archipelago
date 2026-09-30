@@ -31,7 +31,7 @@ void TriggerDeathLink() {
     const auto player_fish = static_cast<uintptr_t>(state::g_player_fish);
     const auto sub_object  = static_cast<uintptr_t>(state::g_sub_object);
     if (!player_fish || !sub_object) {
-        ipc::Log("DeathLink -- no valid fish pointer, dropping");
+        ipc::Log("DeathLink: no valid fish pointer, dropping");
         return;
     }
 
@@ -40,13 +40,13 @@ void TriggerDeathLink() {
         const int slot       = Read(level_obj + kLevelIdOffset);
         const int content_id = state::ContentLevel(slot);
         if (state::IsBonusContentLevel(content_id)) {
-            ipc::Log("DeathLink -- bonus content, dropping");
+            ipc::Log("DeathLink: bonus content, dropping");
             return;
         }
     }
 
     if (Read(sub_object + kAliveOffset) == 0) {
-        ipc::Log("DeathLink -- player not spawned, dropping");
+        ipc::Log("DeathLink: player not spawned, dropping");
         return;
     }
 
@@ -63,7 +63,7 @@ void TriggerDeathLink() {
     fn(reinterpret_cast<void*>(sub_object));
 
     Write(player_fish + kRespawnFlagOffset, 0);
-    ipc::Log("DeathLink -- death triggered");
+    ipc::Log("DeathLink: death triggered");
 }
 
 void HandleLine(const std::string& line) {

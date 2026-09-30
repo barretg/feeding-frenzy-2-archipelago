@@ -154,7 +154,7 @@ class FF2World(World):
         for slot, content in enumerate(self.level_shuffle):
             content_to_slot[content] = slot
 
-        # The map is strictly linear -- the game only unlocks slot N once slot N-1 is
+        # The map is strictly linear: the game only unlocks slot N once slot N-1 is
         # cleared (see HandleBoundaryCheck in native/ff2ap_hooks/hooks/boundary_gate.cpp).
         # Level 58's content can't be cleared without Dash, so Dash gates not just that
         # level's own checks but everything sitting at a later map slot, wherever the
