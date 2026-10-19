@@ -143,6 +143,13 @@ void PollLoop() {
         }
 
         // ── boss defeat -> goal ─────────────────────────────────────────────
+        // The hooked `inc [ecx+0xB4]` also fires on non-boss objects in earlier levels,
+        // so a cached address from before level 60 can already read >= 20 on entry.
+        // Drop it whenever we're off level 60 so only hits landed there count (matches
+        // the old Client.py, which re-captured on entering level 60).
+        if (raw_level_id != 59) {
+            state::g_boss_hp_addr = 0;
+        }
         const auto boss_addr = static_cast<uintptr_t>(state::g_boss_hp_addr);
         if (boss_addr && !goal_sent && raw_level_id == 59 && Read(boss_addr) >= kBossHpGoal) {
             ipc::QueueSend("GOAL");
